@@ -35,6 +35,12 @@ polling:
 chat_bridge:
   auto_start: false
   # Channels are managed via the discord_chat tool, not config
+  # Optional default model preset for the Discord bridge chat context.
+  # Leave empty to use the system scoped default.
+  default_preset: ""
+  # Optional default agent profile for newly created Discord bridge contexts.
+  # Leave empty to use the active system default profile.
+  default_agent_profile: ""
 
   # User allowlist: only these Discord user IDs can interact with the bot.
   # Empty list = allow all server members. Get IDs via Discord Developer Mode.

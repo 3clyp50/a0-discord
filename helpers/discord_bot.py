@@ -170,6 +170,29 @@ class ChatBridgeBot(discord.Client):
         except Exception:
             return {}
 
+    def _get_chat_bridge_defaults(self) -> tuple[str, str]:
+        """Return configured default preset and agent profile for Discord bridge chats."""
+        config = self._get_config()
+        chat_bridge = config.get("chat_bridge", {})
+        preset = str(chat_bridge.get("default_preset", "") or "").strip()
+        profile = str(chat_bridge.get("default_agent_profile", "") or "").strip()
+        return preset, profile
+
+    def _get_bridge_init_overrides(self) -> dict:
+        """Build initialize_agent override settings from bridge defaults."""
+        _, profile = self._get_chat_bridge_defaults()
+        if profile:
+            return {"agent_profile": profile}
+        return {}
+
+    def _apply_bridge_context_defaults(self, context) -> None:
+        """Apply chat-level defaults (model preset) to the provided context."""
+        preset, _ = self._get_chat_bridge_defaults()
+        if not preset:
+            return
+        if context.get_data("chat_model_override") is None:
+            context.set_data("chat_model_override", {"preset_name": preset})
+
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
@@ -472,10 +495,15 @@ class ChatBridgeBot(discord.Client):
                 context = AgentContext.get(context_id)
 
             if context is None:
-                config = initialize_agent()
-                context = AgentContext(config=config, type=AgentContextType.USER)
+                context = AgentContext(
+                    config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
+                    type=AgentContextType.USER,
+                )
+                self._apply_bridge_context_defaults(context)
                 set_context_id(channel_id, context.id)
                 logger.info(f"Created new context {context.id} for channel {channel_id}")
+            else:
+                self._apply_bridge_context_defaults(context)
 
             agent = context.agent0
 
@@ -545,10 +573,15 @@ class ChatBridgeBot(discord.Client):
                 context = AgentContext.get(context_id)
 
             if context is None:
-                config = initialize_agent()
-                context = AgentContext(config=config, type=AgentContextType.USER)
+                context = AgentContext(
+                    config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
+                    type=AgentContextType.USER,
+                )
+                self._apply_bridge_context_defaults(context)
                 set_context_id(channel_id, context.id)
                 logger.info(f"Created new elevated context {context.id} for channel {channel_id}")
+            else:
+                self._apply_bridge_context_defaults(context)
 
             # Sanitize input (injection defense still applies)
             from usr.plugins.discord.helpers.sanitize import sanitize_content, sanitize_username
@@ -614,6 +647,7 @@ class ChatBridgeBot(discord.Client):
         api_key = config.get("chat_bridge", {}).get("api_key", "")
 
         context_id = get_context_id(channel_id) or ""
+        _, agent_profile = self._get_chat_bridge_defaults()
 
         async with aiohttp.ClientSession() as session:
             payload = {
@@ -621,6 +655,8 @@ class ChatBridgeBot(discord.Client):
                 "context_id": context_id,
             }
             headers = {"Content-Type": "application/json"}
+            if not context_id and agent_profile:
+                payload["agent_profile"] = agent_profile
             if api_key:
                 headers["X-API-KEY"] = api_key
 
