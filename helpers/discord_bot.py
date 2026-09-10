@@ -360,6 +360,21 @@ class ChatBridgeBot(discord.Client):
     # Message handling
     # ------------------------------------------------------------------
 
+    def _strip_leading_bot_mention(self, text: str) -> str:
+        """Strip a leading bot mention from user messages."""
+        bot_id = str(self.user.id) if self.user else ""
+        if not bot_id:
+            return text.strip()
+
+        normalized = text.strip()
+        direct = f"<@{bot_id}>"
+        nickname = f"<@!{bot_id}>"
+
+        for mention in (direct, nickname):
+            if normalized.startswith(mention):
+                return normalized[len(mention):].lstrip()
+        return normalized
+
     async def on_message(self, message: discord.Message):
         # Ignore own messages and other bots
         if message.author.bot:
@@ -378,7 +393,7 @@ class ChatBridgeBot(discord.Client):
         if allowed_users and str(message.author.id) not in [str(u) for u in allowed_users]:
             return
 
-        user_text = message.content
+        user_text = self._strip_leading_bot_mention(message.content)
         if not user_text.strip():
             return
 
