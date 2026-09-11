@@ -1,276 +1,95 @@
 # Discord Plugin for Agent Zero
 
-A full-featured Discord integration plugin for Agent Zero that enables reading, summarizing, analyzing, and interacting with Discord servers directly through the agent.
+Read and communicate in Discord with a small default tool surface. Connect multiple bots to saved Agent Zero conversations, with per-bot presets, agent profiles and access rules.
 
-## Verification Status
+## Two baseline tools
 
-| Stage | Result |
-|-------|--------|
-| Regression Tests | 52/52 PASS |
-| Human Verification | Completed (red-team exercise) |
-| Security Assessment | Red-team pentest completed 2026-03-09 |
-| Standards Conformance | v1.1.0 |
+| Tool | Purpose |
+| --- | --- |
+| `discord_read` | Messages, channels, threads, live member lists and individual member details. |
+| `discord_send` | Authorized messages/reactions and explicitly loaded, write-capable skill workflows. |
 
-## Multiple bots
+Member reads do not modify the persona registry. The five former standalone tools are preserved as private workflow implementations under `helpers/workflows/`, not advertised tool definitions. Text prompts and native function discovery see only the two public tool files and their two prompt files.
 
-Open **Config**, keep the existing bot entry, and choose **Add bot** for each additional Discord application. Each entry has its own token, enabled/auto-start switches, server and user allowlists, default preset, default agent profile, and elevation key. Save to apply changes. New bots start in read-only mode with auto-start off.
+## On-demand skills
 
-The **Open** dashboard uses Agent Zero design tokens and provides independent status, start/stop/restart and connection tests. Stopping a bot pauses auto-start until it is started manually or Agent Zero restarts. Renaming a label keeps its stable ID and saved chats. Existing single-bot settings and channel mappings remain compatible; the Config page migrates them on Save. `DISCORD_BOT_TOKEN` overrides only the entry with ID `default`. An empty `bots` list does not revive legacy settings.
+| Skill | Load when needed | Reference files |
+| --- | --- | --- |
+| `discord-research` | Structured bulk summaries or insight extraction; ordinary short summaries need no extra model call. | `references/summarize.md`, `references/insights.md` |
+| `discord-alerts` | Watch channels, check new alerts, or explicitly schedule recurring monitoring. | `references/monitoring.md` |
+| `discord-chat` | Administer bot connections and register automatic-reply channels. | `references/bridge.md` |
+| `discord-persona-mapping` | Synchronize or maintain persistent member notes and registry records. | `references/personas.md` |
+| `discord-communicate` | Compose authorized messages, replies and reactions. | `references/messaging.md` |
 
-Each bot needs a separate Discord application token and server invitation. The plugin connects bots; it does not create Discord applications. Use global plugin settings for gateway bots. Profile-scoped settings apply to agent tools, not extra gateway instances.
+Load the skill with `skills_tool`, then open only the reference needed for the request:
 
-## Features
-
-- **Focused history search** -- jump to a date range, filter by author and keywords inside the bridge, and send only matching excerpts to the model; exact channel names avoid a discovery round trip
-- **Read** channels, threads, and messages from any server the bot is in
-- **Send** messages and reactions through the bot
-- **Summarize** channel conversations with AI-generated structured summaries
-- **Extract insights** for deep research analysis of Discord discussions
-- **Track members** with a persistent persona registry and notes
-- **Monitor channels** for new messages with automatic image analysis
-- **Chat bridge** -- mention the bot or reply to its messages to continue a saved Agent Zero chat using the configured preset and agent profile; no channel registration required
-- **Server context** -- read recent messages automatically and browse permitted channels, active threads, and public thread archives on demand, with message links and pagination
-
-## Quick Start
-
-### 1. Create a Discord Bot
-
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click **New Application** > name it > **Create**
-3. Go to the **Bot** tab > click **Reset Token** > **copy the entire token**
-4. Under **Privileged Gateway Intents**, enable:
-   - **Message Content Intent** (required for reading messages)
-   - **Server Members Intent** (recommended)
-5. Go to **Installation** tab (left sidebar):
-   - Under **Installation Contexts**, keep **Guild Install** checked (uncheck User Install if present)
-   - Under **Default Install Settings** for Guild Install, add scope `bot`
-   - Add bot permissions: `View Channels`, `Send Messages`, `Read Message History`, `Add Reactions`, `Embed Links`, `Manage Messages` (required for auto-deleting `!auth` commands)
-6. Copy the install link and open it in a browser to invite the bot to your server
-
-### 2. Install the Plugin
-
-**Docker (recommended):**
-
-```bash
-# Copy plugin into the container
-docker cp discord-plugin/ <container_name>:/a0/usr/plugins/discord
-
-# Create symlink for Python imports
-docker exec <container_name> ln -sf /a0/usr/plugins/discord /a0/plugins/discord
-
-# Install Python dependencies
-docker exec <container_name> python /a0/usr/plugins/discord/initialize.py
-
-# Enable the plugin
-docker exec <container_name> touch /a0/usr/plugins/discord/.toggle-1
-
-# Restart to load
-docker exec <container_name> supervisorctl restart run_ui
+```json
+{"tool_name":"skills_tool","tool_args":{"action":"load","skill_name":"discord-research"}}
 ```
 
-**Using the install script (inside the container):**
-
-```bash
-# Copy the plugin source into the container first
-docker cp discord-plugin/ <container_name>:/tmp/discord-plugin
-
-# Run the installer
-docker exec <container_name> bash /tmp/discord-plugin/install.sh
+```json
+{"tool_name":"skills_tool","tool_args":{"action":"read_file","skill_name":"discord-research","file_path":"references/summarize.md"}}
 ```
 
-The install script auto-detects the Agent Zero root (`/a0/` or `/git/agent-zero/`), copies files, creates the symlink, installs dependencies, and enables the plugin.
+The reference documents calls through `discord_send` with `action: workflow`, `workflow`, `operation`, and a `parameters` object. Workflow names and operations are allowlisted; arbitrary Python imports or tool names are not accepted. The matching skill must be loaded in the current chat. Both the write tool's policy and explicit legacy backend policy blocks remain enforced.
 
-### 3. Configure the Bot Token
+Bulk research saving is opt-in (`save_to_memory: true`); monitoring still updates cursors, stores alerts and may load images. These side effects are why optional workflows use the write-capable entry, rather than hiding writes inside `discord_read`. Loading a skill is not permission to publish or create scheduled tasks.
 
-**Option A -- Config file (most reliable):**
+The current chat's bot is used for research, monitoring and personas; ordinary Agent Zero chats use the first enabled configured bot. Administration supports an explicit stable `bot_id`. Monitoring and persona state remain plugin-wide.
 
-```bash
-docker exec <container_name> bash -c 'cat > /a0/usr/plugins/discord/config.json << EOF
-{
-  "bot": {
-    "token": "YOUR_BOT_TOKEN_HERE"
-  }
-}
-EOF'
-```
+## Install and configure
 
-**Option B -- Environment variable:**
+Install this repository with Agent Zero's plugin installer. The standalone plugin belongs under `usr/plugins/discord`. Lifecycle hooks prepare dependencies and mirror the bundled skills, including nested reference files, into `usr/skills/`. Updates refresh these skill files without rerunning dependency setup.
 
-Add to your Docker environment or `.env` file:
-```
-DISCORD_BOT_TOKEN=YOUR_BOT_TOKEN_HERE
-```
+For each Discord bot:
 
-**Option C -- WebUI:**
+1. Create a separate application and bot in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Enable Message Content Intent; enable Server Members Intent if member-list operations are needed.
+3. Invite the bot with View Channels, Read Message History and Send Messages. Add Add Reactions for reactions and Manage Messages for deleting authentication commands.
+4. Open plugin **Config**, add an entry, and enter its token. Choose a label, preset, agent profile, server/user allowlists and auto-start behavior.
+5. Save. Use the plugin **Open** page to start, stop, restart or test individual bots.
 
-Open Agent Zero's web interface, navigate to the Discord plugin settings page, and enter your bot token.
+Names are local labels; renaming an entry does not change its stable ID or saved chats. The plugin connects applications, not creates Discord applications. Gateway bot configuration belongs in global plugin settings; profile/project-scoped settings affect agent tools, not extra gateway instances.
 
-### 4. Restart Agent Zero
+`DISCORD_BOT_TOKEN` overrides the entry with ID `default`; `DISCORD_USER_TOKEN` is an optional read-only account override. User-token use may violate Discord's terms; prefer bot accounts. Never put tokens in prompts, skill files, commits or Discord messages.
 
-```bash
-docker exec <container_name> supervisorctl restart run_ui
-```
+Legacy single-bot configuration migrates on Config Save. An explicit empty `bots` list does not revive the old configuration. Removing a bot retains saved chats. Stop pauses auto-start until manual Start or an Agent Zero process restart.
 
-### 5. Get Your Discord IDs
+## Discord chat bridge
 
-Enable **Developer Mode** in Discord (User Settings > Advanced > Developer Mode), then:
+Mention a bot or reply to its message to create or continue a saved chat. Register a channel only for replies to every message. Bots in the same channel have independent chats, authentication sessions and rate limits.
 
-| What | How |
-|------|-----|
-| **Server ID** | Right-click server name > **Copy Server ID** |
-| **Channel ID** | Right-click channel name > **Copy Channel ID** |
-| **User ID** | Right-click a username > **Copy User ID** |
+The read-only bridge has its own dedicated `discord_read` interface, not the two general Agent Zero tools. It includes recent channel context, real runtime model/profile metadata, and permission-scoped server/thread reading. It supports keyword/author/date search that scans inside the plugin and returns compact matches, plus exact-message retrieval. Its eight-read budget is unchanged.
 
-You can also get IDs from a Discord URL: `https://discord.com/channels/SERVER_ID/CHANNEL_ID`
-
-### 6. Start Using It
-
-Open Agent Zero's chat and try:
-
-| What you want | What to say |
-|---------------|-------------|
-| See server structure | "List channels in Discord server YOUR_SERVER_ID" |
-| Read messages | "Read the last 20 messages in Discord channel YOUR_CHANNEL_ID" |
-| Summarize a channel | "Summarize Discord channel YOUR_CHANNEL_ID" |
-| Deep research | "Extract insights from Discord channel YOUR_CHANNEL_ID focused on [topic]" |
-| Send a message | "Send 'Hello!' to Discord channel YOUR_CHANNEL_ID" |
-| List members | "List members in Discord server YOUR_SERVER_ID" |
-| Chat bridge | "Add channel YOUR_CHANNEL_ID to the chat bridge, then start it" |
-| Monitor alerts | "Watch Discord channel YOUR_CHANNEL_ID for new messages" |
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [docs/README.md](docs/README.md) | Full reference -- all tools, configuration, examples, architecture |
-| [docs/QUICKSTART.md](docs/QUICKSTART.md) | 5-minute setup guide |
-| [docs/SETUP.md](docs/SETUP.md) | Credential setup guide (bot creation, permissions, IDs) |
-| [docs/CHAT_BRIDGE.md](docs/CHAT_BRIDGE.md) | Chat bridge setup and configuration |
-| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Internal API endpoints and data formats |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | How to extend and contribute |
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `discord_read` | Read messages, list channels, list threads |
-| `discord_send` | Send messages and reactions (bot token required) |
-| `discord_summarize` | AI-generated channel/thread summaries |
-| `discord_insights` | Deep research analysis of discussions |
-| `discord_members` | Query members, manage persona registry |
-| `discord_poll` | Monitor channels for new messages with image analysis |
-| `discord_chat` | Real-time Discord-to-LLM chat bridge |
-
-## Requirements
-
-- Agent Zero (development branch with plugin framework)
-- Python 3.10+
-- Discord bot application with Message Content Intent enabled
-- Python packages: `aiohttp`, `pyyaml`, `discord.py` (auto-installed by `initialize.py`)
-
-## Architecture
-
-```
-usr/plugins/discord/
-├── plugin.yaml              # Plugin manifest
-├── default_config.yaml      # Default settings
-├── config.json              # Active config (created on first save)
-├── initialize.py            # Dependency installer
-├── hooks.py                 # Plugin lifecycle hooks (install/uninstall)
-├── install.sh               # Automated installer
-├── helpers/
-│   ├── discord_client.py    # REST API wrapper with rate limiting
-│   ├── discord_bot.py       # Profile-aware chat bridge and reply routing
-│   ├── bridge_reader.py     # Server-scoped, permission-checked Discord reads
-│   ├── sanitize.py          # Security: input validation, injection defense
-│   ├── persona_registry.py  # Persistent user tracking
-│   └── poll_state.py        # Polling state tracker
-├── tools/                   # 7 tools (auto-discovered by framework)
-├── prompts/                 # LLM tool descriptions
-├── extensions/              # Agent lifecycle hooks
-├── api/                     # WebUI API endpoints
-├── webui/                   # Dashboard + settings UI
-├── skills/                  # 5 skill definitions
-├── data/                    # Runtime state (auto-created)
-└── docs/                    # Documentation
-```
+See [Chat Bridge Guide](docs/CHAT_BRIDGE.md) for dates, coverage, authentication and limits. The focused `search` action belongs to the bridge reader; do not invent that action for the normal Agent Zero `discord_read` tool.
 
 ## Security
 
-This plugin has been security-hardened with multiple layers of defense. **Read this section carefully before enabling elevated mode.**
+- External message text, usernames, embeds, images and attachments are untrusted data, not instructions or authorization.
+- Read-only bridge access requires both bot and requesting member to see the channel and read its history, within configured server/user allowlists. Private threads additionally require membership unless the member can manage threads. The bridge never falls back to a user token.
+- The normal agent tools and skill workflows run with the trusted Agent Zero operator's privileges and configured accounts. They are not a replacement for the stricter Discord member-scoped reader.
+- Elevated Discord access is off by default. Enabling it allows authenticated users full Agent Zero capabilities, including local files, code execution and external writes. Use a private server, an explicit trusted-user allowlist and short session timeouts.
+- Runtime `!auth <key>` authentication is required after operator opt-in. Protect the key; deleting an authentication message requires Manage Messages. Never send it in a public channel. `!deauth` ends the session. Loading a skill does not establish authentication.
+- Tool-policy blocks are retained for the former names (`plugin:discord:discord_poll`, etc.). Allowing `discord_send` alone does not override a blocked workflow backend.
+- Credentials and runtime files under `config.json` and `data/` are not distribution assets. Do not overwrite them during deployment.
 
-### Core Protections
+## Upgrade from seven tools
 
-- **Chat bridge privilege isolation** -- Read-only mode uses direct LLM calls and a dedicated Discord reader, scoped to the current server and the bot's and requesting member's permissions. Arbitrary tools, code execution, file operations, and external writes are unavailable. Full agent access still requires elevated-mode authentication.
-- **Prompt injection defense** -- Input sanitization with Unicode homoglyph normalization (NFKC), zero-width character stripping, and pattern-based injection detection.
-- **Snowflake ID validation** -- All Discord IDs are validated as 17-20 digit numbers before use in API calls.
-- **SSRF protection** -- Image downloads restricted to Discord CDN hosts only.
-- **Atomic file writes** -- State files written atomically with restrictive permissions (`0o600`).
-- **Per-user rate limiting** -- Sliding window rate limiter (10 messages per 60 seconds) on the chat bridge.
-- **Server allowlist enforcement** -- Configured server allowlists are checked consistently across all tools.
-- **Sanitized error messages** -- Internal details (file paths, stack traces) are never exposed to users.
+Use live member operations through `discord_read` (`members` / `member`). Load the appropriate skill for the other capabilities; old `discord_chat`, `discord_members`, `discord_poll`, `discord_summarize` and `discord_insights` calls are no longer public tool calls.
 
-### User Allowlist
+New monitoring tasks load `discord-alerts` and invoke the documented workflow. Existing custom or scheduled prompts that directly call the old tool names must be updated; the plugin does not silently rewrite operator-authored tasks. Existing state and saved chats are retained.
 
-The **User Allowlist** restricts which Discord users can interact with the chat bridge bot. When configured, only the listed user IDs receive responses -- all other users are silently ignored (no error message, no information leakage about the bot's capabilities).
+The dashboard uses Agent Zero's typography, colors, spacing and border tokens. No new frontend dependencies are required.
 
-- **Empty allowlist** (default): All server members can interact with the bot.
-- **Populated allowlist**: Only listed Discord user IDs can interact. Changes take effect immediately without restarting the bridge.
+## Runnable checks
 
-Configure via WebUI (Settings > Chat Bridge > User Allowlist) or in `config.json`:
-```json
-{
-  "chat_bridge": {
-    "allowed_users": ["YOUR_DISCORD_USER_ID"]
-  }
-}
+From `/a0`, use the framework interpreter:
+
+```bash
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_skill_workflows
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_bridge_search
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_bridge_reader
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_multi_bot
 ```
 
-Get user IDs by enabling Developer Mode in Discord (User Settings > Advanced > Developer Mode), then right-click a user > Copy User ID.
-
-### Elevated Mode -- IMPORTANT
-
-Elevated mode allows authenticated Discord users to access the **full Agent Zero agent loop** -- including tools, code execution, file access, and all system capabilities. This is powerful but carries significant security implications.
-
-**How elevated mode works:**
-1. An admin enables `allow_elevated: true` in config and obtains the auth key from the WebUI
-2. A Discord user types `!auth <key>` in a bridge channel (the message is auto-deleted to protect the key -- requires **Manage Messages** bot permission)
-3. The user's session is elevated for the configured timeout (default: 1 hour)
-4. The user types `!deauth` (or `!dauth`, `!unauth`, `!logout`, `!logoff`) to end the session early
-5. Session state and conversation history are cleared on deauth
-
-**Optimal configuration for elevated mode:**
-
-> **The recommended setup is a private Discord server with only trusted members, a defined User Allowlist, and a single bot.** Ideally, the server should have a single user and the bot -- this provides the strongest security posture by ensuring the communication channel is fully controlled.
-
-If collaboration is required, the plugin supports multiple users, but each user must be explicitly trusted:
-
-1. **Create a dedicated Discord server** -- Do not enable elevated mode on a public or semi-public server. The server itself is part of your security boundary.
-2. **Define the User Allowlist** -- List every user ID that should have access. This is your primary access control layer.
-3. **Limit server membership** -- Only invite users you deeply trust. Anyone with access to the server could potentially observe bot interactions (depending on channel permissions).
-4. **Understand Discord security principles** -- Channel permissions, role hierarchies, and server verification levels all affect who can see and interact with the bot. Ensure you understand these before deploying elevated mode.
-5. **Use short session timeouts** -- The default 1-hour timeout limits exposure if a session is left open.
-6. **Protect the auth key** -- The `!auth` message is auto-deleted (requires **Manage Messages** permission), but share the key only through secure, out-of-band channels. Regenerate it if you suspect compromise.
-
-**What elevated mode grants access to:**
-- Agent Zero's full tool suite (code execution, file operations, web access, etc.)
-- The host system's filesystem and network (within Agent Zero's container)
-- All other installed Agent Zero plugins and capabilities
-
-**Only enable elevated mode if you fully understand these implications and trust every user on the allowlist.**
-
-For detailed configuration, see [docs/CHAT_BRIDGE.md](docs/CHAT_BRIDGE.md#security).
-
-> **Update notice (March 2026):** If you installed this plugin prior to the security hardening commit, please reinstall to pick up these fixes. The most critical change is the chat bridge architectural isolation -- earlier versions routed Discord messages through the full agent loop, which could allow privilege escalation.
-
-## Troubleshooting
-
-See the [Troubleshooting section](docs/README.md#troubleshooting) in the full documentation.
-
-**Common issues:**
-
-- **"Bot token not configured"** -- Set the token via config file, environment variable, or WebUI
-- **"Discord API error 403"** -- Bot lacks channel permissions (View Channels, Read Message History, Send Messages)
-- **"Discord API error 401"** -- Invalid or expired token; regenerate in Developer Portal
-- **Plugin not loading** -- Ensure the symlink exists: `ls -la /a0/plugins/discord` should point to `/a0/usr/plugins/discord`
-- **Import errors** -- The symlink at `/a0/plugins/discord` -> `/a0/usr/plugins/discord` is required for `from plugins.discord.helpers...` imports
+These are offline checks; they do not establish live Discord or model-provider behavior.

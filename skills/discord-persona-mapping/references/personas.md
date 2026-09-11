@@ -1,3 +1,15 @@
+# personas: registry
+
+Load the **discord-persona-mapping** skill before calling this workflow. The old `discord_members` name is a backend identifier, not a callable public tool.
+
+Use this complete invocation:
+
+```json
+{"tool_name":"discord_send","tool_args":{"action":"workflow","workflow":"personas","operation":"registry","parameters":{}}}
+```
+
+The argument lists and short JSON examples below describe the **parameters** object. For action-based operations, put the selected action in the outer **operation** field; a nested action cannot override it. Do not call the old tool name. Existing policy blocks on that backend still apply.
+
 ## discord_members
 Query Discord server members and manage the persona registry. Tracks who users are across sessions.
 

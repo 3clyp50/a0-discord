@@ -1,3 +1,15 @@
+# monitoring: check
+
+Load the **discord-alerts** skill before calling this workflow. The old `discord_poll` name is a backend identifier, not a callable public tool.
+
+Use this complete invocation:
+
+```json
+{"tool_name":"discord_send","tool_args":{"action":"workflow","workflow":"monitoring","operation":"check","parameters":{}}}
+```
+
+The argument lists and short JSON examples below describe the **parameters** object. For action-based operations, put the selected action in the outer **operation** field; a nested action cannot override it. Do not call the old tool name. Existing policy blocks on that backend still apply.
+
 ## discord_poll
 Monitor Discord channels for new messages (alerts). Tracks last-seen message per channel so each poll only returns new content. Supports image extraction and analysis. Can set up automatic scheduled polling.
 

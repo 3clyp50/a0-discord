@@ -96,14 +96,14 @@ class DiscordInsights(Tool):
                 channel_info = await client.get_channel(target_id)
                 channel_name = channel_info.get("name", target_id)
 
-                self.set_progress("Fetching messages...")
+                await self.set_progress("Fetching messages...")
                 messages = await client.get_all_channel_messages(channel_id=target_id, limit=limit)
                 await client.close()
 
                 if not messages:
                     return Response(message=f"No messages found in #{channel_name}.", break_loop=False)
 
-                self.set_progress("Extracting insights...")
+                await self.set_progress("Extracting insights...")
                 formatted = truncate_bulk(format_messages(messages))
                 prompt = INSIGHTS_PROMPT.format(messages=formatted)
                 if focus:
@@ -121,7 +121,7 @@ class DiscordInsights(Tool):
                 )
 
                 if save_to_memory:
-                    self.set_progress("Saving to memory...")
+                    await self.set_progress("Saving to memory...")
                     timestamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
                     guild_label = f" (guild: {guild_id})" if guild_id else ""
                     focus_label = f" [focus: {focus}]" if focus else ""
@@ -152,7 +152,7 @@ class DiscordInsights(Tool):
 
 async def _save_to_memory(agent, text: str):
     try:
-        from plugins.memory.helpers.memory import Memory
+        from plugins._memory.helpers.memory import Memory
         db = await Memory.get(agent)
         metadata = {"area": "main", "source": "discord_insights"}
         await db.insert_text(text, metadata)

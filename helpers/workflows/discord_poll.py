@@ -56,8 +56,7 @@ class DiscordPoll(Tool):
 
         # If a specific channel is given, only check that one
         if channel_id:
-            if channel_id not in watches:
-                watches = {channel_id: watches.get(channel_id, {})}
+            watches = {channel_id: watches.get(channel_id, {})}
 
         if not watches:
             return Response(
@@ -80,7 +79,7 @@ class DiscordPoll(Tool):
                     owner_id = ch_config.get("owner_id", "")
                     label = ch_config.get("label", ch_id)
 
-                    self.set_progress(f"Checking #{label}...")
+                    await self.set_progress(f"Checking #{label}...")
 
                     # Fetch new messages since last poll
                     fetch_kwargs = {"channel_id": ch_id, "limit": 50}
@@ -183,7 +182,7 @@ class DiscordPoll(Tool):
         alert_text = "\n\n".join(all_alerts)
 
         # Auto-save to memory
-        self.set_progress("Saving alerts to memory...")
+        await self.set_progress("Saving alerts to memory...")
         timestamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
         memory_text = f"Discord Alerts [{timestamp}]\n\n{alert_text}"
         await _save_to_memory(self.agent, memory_text)
@@ -336,7 +335,9 @@ class DiscordPoll(Tool):
                 name=f"Discord Alert Poll (every {interval_min}min)",
                 system_prompt=(
                     "You are monitoring Discord channels for new alerts. "
-                    "Use the discord_poll tool with action 'check' to look for new messages. "
+                    "First load discord-alerts with skills_tool (action load, skill_name discord-alerts). "
+                    "Read its references/monitoring.md when needed. Then call discord_send with "
+                    "action workflow, workflow monitoring, operation check, parameters {}. "
                     "If alerts are found, summarize them concisely. "
                     "If images are loaded, analyze them for price targets, levels, and patterns."
                 ),
@@ -372,7 +373,7 @@ class DiscordPoll(Tool):
 
 async def _save_to_memory(agent, text: str):
     try:
-        from plugins.memory.helpers.memory import Memory
+        from plugins._memory.helpers.memory import Memory
         db = await Memory.get(agent)
         metadata = {"area": "main", "source": "discord_poll"}
         await db.insert_text(text, metadata)

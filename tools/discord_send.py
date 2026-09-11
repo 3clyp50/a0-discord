@@ -9,6 +9,9 @@ class DiscordSend(Tool):
     """Send a message or reaction to a Discord channel via bot account."""
 
     async def execute(self, **kwargs) -> Response:
+        if self.args.get("action") == "workflow":
+            from usr.plugins.discord.helpers.skill_workflows import run_workflow
+            return await run_workflow(self)
         channel_id = self.args.get("channel_id", "")
         content = self.args.get("content", "")
         reply_to = self.args.get("reply_to", "")
@@ -19,8 +22,8 @@ class DiscordSend(Tool):
         except ValueError as e:
             return Response(message=f"Error: {e}", break_loop=False)
 
-        config = get_discord_config(self.agent)
         try:
+            config = get_discord_config(self.agent, bot_id=self.args.get("bot_id"))
             require_auth(config)
         except ValueError as e:
             return Response(message=f"Auth error: {e}", break_loop=False)
@@ -30,8 +33,14 @@ class DiscordSend(Tool):
                 break_loop=False,
             )
 
+        client = None
         try:
-            client = DiscordClient.from_config(agent=self.agent, mode="bot")
+            client = DiscordClient.from_config(agent=self.agent, mode="bot", bot_id=config["bot_id"])
+            allowed_servers = {str(value) for value in config.get("servers", [])}
+            if allowed_servers:
+                channel = await client.get_channel(channel_id)
+                if str(channel.get("guild_id", "")) not in allowed_servers:
+                    return Response(message="Channel is not in this bot's allowed servers list.", break_loop=False)
 
             if action == "send":
                 if not content:
@@ -67,6 +76,9 @@ class DiscordSend(Tool):
             return Response(message=f"Discord API error: {e}", break_loop=False)
         except Exception as e:
             return Response(message=f"Error sending to Discord: {type(e).__name__}", break_loop=False)
+        finally:
+            if client is not None:
+                await client.close()
 
 
 def _split_message(content: str, max_length: int = 2000) -> list[str]:

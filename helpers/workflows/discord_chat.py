@@ -64,7 +64,7 @@ class DiscordChat(Tool):
                 break_loop=False,
             )
 
-        self.set_progress("Starting chat bridge bot...")
+        await self.set_progress("Starting chat bridge bot...")
         try:
             bot = await start_chat_bridge(token, self.bot_id)
             status = get_bot_status(self.bot_id)
@@ -89,7 +89,7 @@ class DiscordChat(Tool):
         if not status.get("running"):
             return Response(message="Chat bridge is not running.", break_loop=False)
 
-        self.set_progress("Stopping chat bridge bot...")
+        await self.set_progress("Stopping chat bridge bot...")
         try:
             await stop_chat_bridge(self.bot_id)
             return Response(message="Chat bridge stopped.", break_loop=False)

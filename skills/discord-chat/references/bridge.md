@@ -1,3 +1,15 @@
+# administration: status
+
+Load the **discord-chat** skill before calling this workflow. The old `discord_chat` name is a backend identifier, not a callable public tool.
+
+Use this complete invocation:
+
+```json
+{"tool_name":"discord_send","tool_args":{"action":"workflow","workflow":"administration","operation":"status","parameters":{}}}
+```
+
+The argument lists and short JSON examples below describe the **parameters** object. For action-based operations, put the selected action in the outer **operation** field; a nested action cannot override it. Do not call the old tool name. Existing policy blocks on that backend still apply.
+
 ## discord_chat
 Manage the Discord chat bridge — a persistent bot that routes Discord messages through Agent Zero's LLM. Users can chat with the agent directly from Discord channels.
 

@@ -414,7 +414,7 @@ fi
 section "6. Tool Classes"
 # ============================================================
 
-TOOLS=(discord_read discord_send discord_summarize discord_insights discord_members discord_poll discord_chat)
+TOOLS=(discord_read discord_send)
 for i in "${!TOOLS[@]}"; do
     TOOL="${TOOLS[$i]}"
     NUM=$((i + 1))

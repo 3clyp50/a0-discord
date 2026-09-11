@@ -35,6 +35,21 @@ def _find_python() -> str:
     return "python3"
 
 
+def _sync_skills():
+    import shutil
+    source = _get_plugin_dir() / "skills"
+    destination = _get_a0_root() / "usr" / "skills"
+    for skill_dir in source.iterdir():
+        if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+            shutil.copytree(skill_dir, destination / skill_dir.name, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def update(**kwargs):
+    """Refresh plugin-owned skill mirrors without rerunning dependency setup."""
+    _sync_skills()
+
+
 def install(**kwargs):
     """Post-install hook: set up data dir, deps, skills, toggle."""
     plugin_dir = _get_plugin_dir()
@@ -65,19 +80,8 @@ def install(**kwargs):
             json.dump({}, f)
         logger.info("Created config.json with 0o600 permissions")
 
-    # 4. Install skills
-    skills_src = plugin_dir / "skills"
-    skills_dst = a0_root / "usr" / "skills"
-    if skills_src.is_dir():
-        for skill_dir in skills_src.iterdir():
-            if skill_dir.is_dir():
-                target = skills_dst / skill_dir.name
-                target.mkdir(parents=True, exist_ok=True)
-                for f in skill_dir.iterdir():
-                    dest = target / f.name
-                    if f.is_file():
-                        dest.write_bytes(f.read_bytes())
-                logger.info("Installed skill: %s", skill_dir.name)
+    # 4. Install skills, including their on-demand reference files.
+    _sync_skills()
 
     # 5. Install Python dependencies via initialize.py
     init_script = plugin_dir / "initialize.py"
