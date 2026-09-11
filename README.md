@@ -21,6 +21,7 @@ Each bot needs a separate Discord application token and server invitation. The p
 
 ## Features
 
+- **Focused history search** -- jump to a date range, filter by author and keywords inside the bridge, and send only matching excerpts to the model; exact channel names avoid a discovery round trip
 - **Read** channels, threads, and messages from any server the bot is in
 - **Send** messages and reactions through the bot
 - **Summarize** channel conversations with AI-generated structured summaries

@@ -35,6 +35,22 @@ Runnable isolation check (does not contact Discord):
 
 ## How the Chat Bridge Works
 
+### Focused historical lookup
+
+The read-only reader supports `action: search` with a channel ID or exact name, `query`, `author_id` (`me` means the requesting user), `since`, `until`, and `order` (`oldest` or `newest`). Dates are ISO 8601, with UTC assumed when no timezone is supplied. The start is inclusive and the end is exclusive. Discord history cursors jump directly to the specified dates.
+
+Search filters up to 1,000 messages inside the plugin and returns at most 20 compact matching excerpts, capped at approximately 12,000 characters. Nonmatching message bodies never enter the model's context. Queries match all words across message text, embeds and attachment names; attachment contents are not searched. Bots are excluded by default, with an explicit `include_bots` override. Normal permission checks still apply.
+
+For a post in `#general` on a known date, specify that day as `since`, the following day as `until`, and `author_id: me` when appropriate. Fetch a matching `message_id` with `action: messages` to inspect the full evidence. Searches apply to one channel or thread, not every thread below a channel.
+
+Results report `scanned`, `complete`, and either `next_before` or `next_after`. Resume partial scans using the matching cursor and identical filters. An empty partial scan is not proof of absence. The eight-read model budget remains unchanged.
+
+Run the offline search regression check in the framework runtime:
+
+```bash
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_bridge_search
+```
+
 ```
 Discord User sends message in #llm-chat
     |

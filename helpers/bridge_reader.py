@@ -2,7 +2,7 @@
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import discord
 
@@ -14,6 +14,8 @@ from usr.plugins.discord.helpers.sanitize import (
 
 class BridgeReader:
     MAX_OUTPUT_CHARS = 40000
+    MAX_SEARCH_MESSAGES = 1000
+    MAX_SEARCH_OUTPUT_CHARS = 12000
 
     def __init__(self, bot, message):
         self.bot = bot
@@ -41,6 +43,15 @@ class BridgeReader:
         return True
 
     async def _channel(self, channel_id):
+        if channel_id and not str(channel_id).isdigit():
+            name = str(channel_id).lstrip("#").casefold()
+            matches = []
+            for channel in self.guild.channels if self.guild else []:
+                if channel.name.casefold() == name and await self._visible(channel):
+                    matches.append(channel)
+            if len(matches) != 1:
+                raise ValueError("Channel name is unavailable or ambiguous. List channels and use an exact ID.")
+            return matches[0]
         channel_id = int(channel_id or self.message.channel.id)
         channel = self.message.channel if channel_id == self.message.channel.id else (
             self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
@@ -59,6 +70,7 @@ class BridgeReader:
             "id": str(message.id),
             "url": message.jump_url,
             "author": sanitize_username(message.author.display_name),
+            "author_id": str(message.author.id),
             "created_at": message.created_at.isoformat(),
             "content": sanitize_content(message.content),
             "embeds": [
@@ -79,9 +91,101 @@ class BridgeReader:
             "type": str(channel.type), "parent_id": str(getattr(channel, "parent_id", "") or ""),
         }
 
+    @staticmethod
+    def _history_bounds(args):
+        """Intersect pagination cursors with an inclusive start/exclusive end."""
+        before = int(args["before"]) if args.get("before") else None
+        after = int(args["after"]) if args.get("after") else None
+        dates = {}
+        for key in ("since", "until"):
+            if not args.get(key):
+                continue
+            stamp = datetime.fromisoformat(str(args[key]).replace("Z", "+00:00"))
+            stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp.astimezone(timezone.utc)
+            boundary = discord.utils.time_snowflake(stamp)
+            if boundary < 0:
+                raise ValueError("Discord history dates must be on or after 2015-01-01.")
+            dates[key] = stamp.isoformat()
+            if key == "since":
+                after = max(after, boundary - 1) if after is not None else boundary - 1
+            else:
+                before = min(before, boundary) if before is not None else boundary
+        if "since" in dates and "until" in dates and dates["since"] >= dates["until"]:
+            raise ValueError("since must be earlier than until (exclusive).")
+        return (discord.Object(id=before) if before is not None else None,
+                discord.Object(id=after) if after is not None else None, dates)
+
+    async def _search(self, args):
+        query = str(args.get("query", "") or "").strip()
+        if len(query) > 200:
+            raise ValueError("Search query must be at most 200 characters.")
+        terms = re.findall(r"[^\W_]+", query.casefold())
+        if query and not terms:
+            raise ValueError("Search query must contain a word or number.")
+        author_id = str(args.get("author_id", "") or "")
+        if author_id.casefold() == "me":
+            author_id = str(self.message.author.id)
+        if author_id and not author_id.isdecimal():
+            raise ValueError("author_id must be a Discord user ID or 'me'.")
+        if not (terms or author_id or args.get("since") or args.get("until")):
+            raise ValueError("Search requires query, author_id, since or until.")
+        order = args.get("order", "newest")
+        if order not in ("oldest", "newest"):
+            raise ValueError("Search order must be oldest or newest.")
+        include_bots = args.get("include_bots", False)
+        if not isinstance(include_bots, bool):
+            raise ValueError("include_bots must be true or false.")
+        limit = max(1, min(int(args.get("limit", 10)), 20))
+        scan_limit = max(1, min(int(args.get("scan_limit", self.MAX_SEARCH_MESSAGES)), self.MAX_SEARCH_MESSAGES))
+        before, after, dates = self._history_bounds(args)
+        channel = await self._channel(args.get("thread_id") or args.get("channel_id"))
+        if not hasattr(channel, "history"):
+            raise ValueError("List this channel's threads first, then search a thread ID.")
+        matches, scanned, size, cursor, complete = [], 0, 0, None, True
+        # Filter inside the bridge; nonmatching messages never reach the model.
+        async for item in channel.history(limit=scan_limit + 1, before=before, after=after, oldest_first=order == "oldest"):
+            if scanned >= scan_limit or len(matches) >= limit:
+                complete = False
+                break
+            record = None
+            if ((not author_id or str(item.author.id) == author_id)
+                    and (include_bots or not getattr(item.author, "bot", False))):
+                record = self.message_record(item)
+            hit = None
+            if record:
+                text = "\n".join([record["content"]]
+                                 + [e["title"] + " " + e["description"] for e in record["embeds"]]
+                                 + [a["name"] for a in record["attachments"]])
+                searchable = " ".join(re.findall(r"[^\W_]+", text.casefold()))
+                if all(term in searchable for term in terms):
+                    start = max(0, text.casefold().find(terms[0]) - 120) if terms else 0
+                    excerpt = text[start:start + 600]
+                    hit = {key: record[key] for key in ("id", "url", "author", "author_id", "created_at")}
+                    hit.update(excerpt=excerpt, excerpt_truncated=start > 0 or len(text) > start + 600)
+            hit_size = len(json.dumps(hit, ensure_ascii=False)) if hit else 0
+            if size + hit_size > self.MAX_SEARCH_OUTPUT_CHARS - 1024:
+                complete = False
+                break
+            scanned += 1
+            cursor = str(item.id)
+            if hit:
+                matches.append(hit)
+                size += hit_size
+        return {
+            "channel_id": str(channel.id), "query": query, "author_id": author_id or None,
+            **dates, "order": order, "include_bots": include_bots,
+            "matches": matches, "scanned": scanned, "complete": complete,
+            "next_before": cursor if not complete and order == "newest" else None,
+            "next_after": cursor if not complete and order == "oldest" else None,
+            "coverage": "Only this channel/thread and date range; filters match message text, embeds and attachment names, not attachment contents. "
+                        + ("Range exhausted." if complete else "Partial scan; resume with the returned cursor and identical filters."),
+        }
+
     async def read(self, args):
         try:
             config = self.bot._get_config()
+            if not config.get("bot", {}).get("enabled", True):
+                raise ValueError("This bot is disabled or its configuration is unavailable.")
             servers = [str(s) for s in config.get("servers", [])]
             users = [str(u) for u in config.get("chat_bridge", {}).get("allowed_users", [])]
             if users and str(self.message.author.id) not in users:
@@ -91,6 +195,8 @@ class BridgeReader:
             if args.get("guild_id") and (self.guild is None or str(args["guild_id"]) != str(self.guild.id)):
                 raise ValueError("Reads are limited to the current server.")
             action = args.get("action", "messages")
+            if action == "search":
+                return await self._search(args)
             limit = max(1, min(int(args.get("limit", 50)), 100))
             if action == "channels":
                 channels = []
@@ -116,15 +222,14 @@ class BridgeReader:
                 return {"threads": threads, "next_before": cursor,
                         "coverage": "Active threads; also one page of public archived threads when channel_id is supplied."}
             if action != "messages":
-                raise ValueError("Use messages, channels, or threads. This reader cannot write or execute code.")
+                raise ValueError("Use search, messages, channels, or threads. This reader cannot write or execute code.")
             channel = await self._channel(args.get("thread_id") or args.get("channel_id"))
             if not hasattr(channel, "history"):
                 raise ValueError("List this channel's threads first, then read a thread ID.")
             if args.get("message_id"):
                 record = self.message_record(await channel.fetch_message(int(args["message_id"])))
                 return {"messages": [record] if record else [], "next_before": None}
-            before = discord.Object(id=int(args["before"])) if args.get("before") else None
-            after = discord.Object(id=int(args["after"])) if args.get("after") else None
+            before, after, _ = self._history_bounds(args)
             records, size, cursor, scanned = [], 0, None, 0
             async for item in channel.history(limit=limit, before=before, after=after, oldest_first=False):
                 record = self.message_record(item)
@@ -138,5 +243,5 @@ class BridgeReader:
             return {"channel_id": str(channel.id), "messages": records, "order": "newest first",
                     "scanned": scanned, "next_before": cursor,
                     "coverage": "One page only; follow next_before until an empty page for older history."}
-        except (discord.DiscordException, ValueError, TypeError) as exc:
+        except (discord.DiscordException, ValueError, TypeError, OverflowError) as exc:
             return {"error": str(exc)}
