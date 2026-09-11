@@ -2,16 +2,64 @@ import asyncio
 import aiohttp
 import os
 import time
+from copy import deepcopy
+from pathlib import Path
+import json
+import threading
 from typing import Optional
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
+_config_lock = threading.RLock()
 
 
-def get_discord_config(agent=None):
+def get_bot_configs(config):
+    """Keep old single-bot installations working until settings are saved."""
+    if config.get("bots") is not None:
+        return config["bots"]
+    return [{
+        "id": "default", "name": config.get("bot", {}).get("name") or "Main bot",
+        "token": config.get("bot", {}).get("token", ""), "enabled": True,
+        "servers": config.get("servers", []),
+        "chat_bridge": config.get("chat_bridge", {}),
+    }]
+
+
+def persist_auth_key(key, bot_id="default"):
+    """Update only the selected bot's key, preserving other settings."""
+    from usr.plugins.discord.helpers.sanitize import secure_write_json
+    path = Path(__file__).resolve().parent.parent / "config.json"
+    with _config_lock:
+        settings = json.loads(path.read_text()) if path.exists() else {}
+        if settings.get("bots") is None and bot_id == "default":
+            target = settings
+        else:
+            target = next((bot for bot in settings.get("bots", []) if bot["id"] == bot_id), None)
+            if target is None:
+                raise ValueError("Save this bot before generating a persistent auth key.")
+        target.setdefault("chat_bridge", {})["auth_key"] = key
+        secure_write_json(path, settings)
+
+
+def resolve_agent_profile(value, project_name=None):
+    """Accept a profile ID or an unambiguous display name from older settings."""
+    profile = str(value or "").strip()
+    if not profile:
+        return ""
+    from helpers.subagents import get_available_agents_dict
+    profiles = get_available_agents_dict(project_name)
+    if profile in profiles:
+        return profile
+    matches = [name for name, item in profiles.items() if item.title.casefold() == profile.casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f"Unknown Discord agent profile: {profile}. Choose a profile from Agent Editor.")
+
+
+def get_discord_config(agent=None, bot_id=None):
     """Load Discord config through the plugin framework with env var overrides."""
     try:
         from helpers import plugins
-        config = plugins.get_plugin_config("discord", agent=agent) or {}
+        config = deepcopy(plugins.get_plugin_config("discord", agent=agent) or {})
     except Exception:
         config = {}
 
@@ -20,6 +68,24 @@ def get_discord_config(agent=None):
         config.setdefault("bot", {})["token"] = os.environ["DISCORD_BOT_TOKEN"]
     if os.environ.get("DISCORD_USER_TOKEN"):
         config.setdefault("user", {})["token"] = os.environ["DISCORD_USER_TOKEN"]
+    bots = get_bot_configs(config)
+    config["bots"] = bots
+    for bot in bots:
+        if bot.get("id") == "default" and os.environ.get("DISCORD_BOT_TOKEN"):
+            bot["token"] = os.environ["DISCORD_BOT_TOKEN"]
+    if bot_id is None and agent is not None:
+        bot_id = agent.context.get_data("discord_bot_id")
+    if bot_id is not None:
+        selected = next((bot for bot in bots if bot.get("id") == bot_id), None)
+        if selected is None:
+            raise ValueError("Unknown Discord bot. Choose a configured bot ID.")
+    else:
+        selected = next((bot for bot in bots if bot.get("enabled", True) and bot.get("token")), None)
+        selected = selected or (bots[0] if bots else {})
+    config["bot_id"] = selected.get("id", "default")
+    config["bot"] = selected
+    config["servers"] = selected.get("servers", [])
+    config["chat_bridge"] = selected.get("chat_bridge", {})
     return config
 
 
@@ -51,9 +117,11 @@ class DiscordClient:
         self._rate_limiter = RateLimiter()
 
     @classmethod
-    def from_config(cls, agent=None, mode: str = "bot") -> "DiscordClient":
-        config = get_discord_config(agent)
+    def from_config(cls, agent=None, mode: str = "bot", bot_id=None) -> "DiscordClient":
+        config = get_discord_config(agent, bot_id=bot_id)
         if mode == "bot":
+            if not config.get("bot", {}).get("enabled", True):
+                raise ValueError("This Discord bot is disabled.")
             token = config.get("bot", {}).get("token")
             if not token:
                 raise ValueError(

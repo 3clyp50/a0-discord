@@ -1,11 +1,9 @@
-"""API endpoint: Chat bridge start/stop/status.
-URL: POST /api/plugins/discord/discord_bridge_api
-"""
+"""Authenticated, per-bot bridge controls and secret-free dashboard status."""
+import logging
 from helpers.api import ApiHandler, Request, Response
 
 
 class DiscordBridgeApi(ApiHandler):
-
     @classmethod
     def get_methods(cls) -> list[str]:
         return ["POST"]
@@ -15,59 +13,40 @@ class DiscordBridgeApi(ApiHandler):
         return True
 
     async def process(self, input: dict, request: Request) -> dict | Response:
-        action = input.get("action", "status")
+        from usr.plugins.discord.helpers.discord_client import get_discord_config
+        from usr.plugins.discord.helpers.discord_bot import get_bot_status, start_chat_bridge, stop_chat_bridge
 
         try:
+            action = input.get("action", "status")
+            config = get_discord_config(bot_id=input.get("bot_id"))
+            bot_id = config["bot_id"]
             if action == "status":
-                return self._status()
-            elif action == "start":
-                return await self._start()
-            elif action == "stop":
-                return await self._stop()
-            elif action == "restart":
-                return await self._restart()
-            else:
-                return {"ok": False, "error": f"Unknown action: {action}"}
-        except Exception as e:
-            return {"ok": False, "error": f"Bridge error: {type(e).__name__}"}
-
-    def _status(self) -> dict:
-        from usr.plugins.discord.helpers.discord_bot import get_bot_status
-        status = get_bot_status()
-        return {"ok": True, **status}
-
-    async def _start(self) -> dict:
-        from usr.plugins.discord.helpers.discord_bot import get_bot_status, start_chat_bridge
-        from usr.plugins.discord.helpers.discord_client import get_discord_config
-
-        status = get_bot_status()
-        if status.get("running"):
-            return {"ok": True, "message": "Bridge is already running", **status}
-
-        config = get_discord_config()
-        token = (config.get("bot", {}).get("token", "") or "").strip()
-        if not token:
-            return {"ok": False, "error": "No bot token configured"}
-
-        await start_chat_bridge(token)
-        return {"ok": True, "message": "Bridge started", **get_bot_status()}
-
-    async def _stop(self) -> dict:
-        from usr.plugins.discord.helpers.discord_bot import get_bot_status, stop_chat_bridge
-
-        await stop_chat_bridge()
-        return {"ok": True, "message": "Bridge stopped", **get_bot_status()}
-
-    async def _restart(self) -> dict:
-        from usr.plugins.discord.helpers.discord_bot import get_bot_status, start_chat_bridge, stop_chat_bridge
-        from usr.plugins.discord.helpers.discord_client import get_discord_config
-
-        await stop_chat_bridge()
-
-        config = get_discord_config()
-        token = (config.get("bot", {}).get("token", "") or "").strip()
-        if not token:
-            return {"ok": False, "error": "No bot token configured"}
-
-        await start_chat_bridge(token)
-        return {"ok": True, "message": "Bridge restarted", **get_bot_status()}
+                bots = []
+                for bot in config["bots"]:
+                    bridge = bot.get("chat_bridge", {})
+                    bots.append({
+                        **get_bot_status(bot["id"]),
+                        "id": bot["id"], "name": bot.get("name") or bot["id"],
+                        "enabled": bot.get("enabled", True), "configured": bool(bot.get("token")),
+                        "auto_start": bridge.get("auto_start", False),
+                        "preset": bridge.get("default_preset", ""),
+                        "profile": bridge.get("default_agent_profile", ""),
+                    })
+                return {"ok": True, **get_bot_status(bot_id), "bots": bots}
+            if action not in ("start", "stop", "restart"):
+                return {"ok": False, "error": "Unknown bridge action."}
+            if action != "stop":
+                if not config["bot"].get("enabled", True):
+                    raise ValueError("Enable this bot in Config before starting it.")
+                if not config["bot"].get("token"):
+                    raise ValueError("Save a bot token in Config first.")
+            if action in ("stop", "restart"):
+                await stop_chat_bridge(bot_id)
+            if action in ("start", "restart"):
+                await start_chat_bridge(config["bot"]["token"], bot_id)
+            return {"ok": True, **get_bot_status(bot_id)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            logging.getLogger("discord_chat_bridge").exception("Discord bridge control failed")
+            return {"ok": False, "error": "Bridge control failed. Check the Agent Zero log."}

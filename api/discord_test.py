@@ -1,11 +1,8 @@
-"""API endpoint: Test Discord connection.
-URL: POST /api/plugins/discord/discord_test
-"""
+"""Test one configured Discord bot without exposing its token."""
 from helpers.api import ApiHandler, Request, Response
 
 
 class DiscordTest(ApiHandler):
-
     @classmethod
     def get_methods(cls) -> list[str]:
         return ["GET", "POST"]
@@ -15,25 +12,16 @@ class DiscordTest(ApiHandler):
         return True
 
     async def process(self, input: dict, request: Request) -> dict | Response:
+        from usr.plugins.discord.helpers.discord_client import DiscordClient, get_discord_config
+        client = None
         try:
-            from usr.plugins.discord.helpers.discord_client import DiscordClient, get_discord_config
-
-            config = get_discord_config()
-            mode = "bot" if config.get("bot", {}).get("token") else "user"
-
-            if mode == "bot" and not config.get("bot", {}).get("token"):
-                if not config.get("user", {}).get("token"):
-                    return {"ok": False, "error": "No token configured"}
-
-            client = DiscordClient.from_config(mode=mode)
+            config = get_discord_config(bot_id=input.get("bot_id"))
+            mode = "bot" if input.get("bot_id") or config["bot"].get("token") else "user"
+            client = DiscordClient.from_config(mode=mode, bot_id=input.get("bot_id"))
             user = await client.get_current_user()
-            await client.close()
-
-            return {
-                "ok": True,
-                "user": user.get("username", "Unknown"),
-                "mode": mode,
-                "id": user.get("id"),
-            }
-        except Exception as e:
-            return {"ok": False, "error": f"Connection failed: {type(e).__name__}"}
+            return {"ok": True, "user": user.get("username", "Unknown"), "mode": mode, "id": user.get("id")}
+        except Exception as exc:
+            return {"ok": False, "error": f"Connection failed: {type(exc).__name__}"}
+        finally:
+            if client is not None:
+                await client.close()

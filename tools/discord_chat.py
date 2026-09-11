@@ -16,8 +16,9 @@ class DiscordChat(Tool):
     chat with Agent Zero through Discord channels."""
 
     async def execute(self, **kwargs) -> Response:
-        config = get_discord_config(self.agent)
         try:
+            config = get_discord_config(self.agent, bot_id=self.args.get("bot_id"))
+            self.bot_id = config["bot_id"]
             require_auth(config)
         except ValueError as e:
             return Response(message=f"Auth error: {e}", break_loop=False)
@@ -44,8 +45,11 @@ class DiscordChat(Tool):
 
     async def _start(self) -> Response:
         """Start the chat bridge bot."""
-        config = get_discord_config(self.agent)
+        config = get_discord_config(self.agent, bot_id=self.bot_id)
         token = config.get("bot", {}).get("token", "")
+
+        if not config["bot"].get("enabled", True):
+            return Response(message="This Discord bot is disabled. Enable it in Config first.", break_loop=False)
 
         if not token:
             return Response(
@@ -53,7 +57,7 @@ class DiscordChat(Tool):
                 break_loop=False,
             )
 
-        status = get_bot_status()
+        status = get_bot_status(self.bot_id)
         if status.get("running") and status.get("status") == "connected":
             return Response(
                 message=f"Chat bridge is already running as {status.get('user', 'unknown')}.",
@@ -62,14 +66,14 @@ class DiscordChat(Tool):
 
         self.set_progress("Starting chat bridge bot...")
         try:
-            bot = await start_chat_bridge(token)
-            status = get_bot_status()
-            channels = get_chat_channels()
+            bot = await start_chat_bridge(token, self.bot_id)
+            status = get_bot_status(self.bot_id)
+            channels = get_chat_channels(self.bot_id)
             msg = f"Chat bridge started as **{status.get('user', 'unknown')}**."
             if channels:
                 msg += f"\nListening in {len(channels)} channel(s)."
             else:
-                msg += "\nNo chat channels configured yet. Use action 'add_channel' to designate a channel."
+                msg += "\nMention the bot or reply to its messages. Use 'add_channel' for replies to every message in a channel."
             return Response(message=msg, break_loop=False)
         except TimeoutError:
             return Response(
@@ -81,13 +85,13 @@ class DiscordChat(Tool):
 
     async def _stop(self) -> Response:
         """Stop the chat bridge bot."""
-        status = get_bot_status()
+        status = get_bot_status(self.bot_id)
         if not status.get("running"):
             return Response(message="Chat bridge is not running.", break_loop=False)
 
         self.set_progress("Stopping chat bridge bot...")
         try:
-            await stop_chat_bridge()
+            await stop_chat_bridge(self.bot_id)
             return Response(message="Chat bridge stopped.", break_loop=False)
         except Exception as e:
             return Response(message=f"Error stopping chat bridge: {type(e).__name__}", break_loop=False)
@@ -103,7 +107,7 @@ class DiscordChat(Tool):
         except ValueError as e:
             return Response(message=f"Error: {e}", break_loop=False)
 
-        add_chat_channel(channel_id, guild_id, label)
+        add_chat_channel(channel_id, guild_id, label, self.bot_id)
         msg = f"Channel {channel_id} added to chat bridge"
         if label:
             msg += f" (#{label})"
@@ -118,7 +122,7 @@ class DiscordChat(Tool):
         except ValueError as e:
             return Response(message=f"Error: {e}", break_loop=False)
 
-        remove_chat_channel(channel_id)
+        remove_chat_channel(channel_id, self.bot_id)
         return Response(
             message=f"Channel {channel_id} removed from chat bridge.",
             break_loop=False,
@@ -126,7 +130,7 @@ class DiscordChat(Tool):
 
     def _list_channels(self) -> Response:
         """List all chat bridge channels."""
-        channels = get_chat_channels()
+        channels = get_chat_channels(self.bot_id)
         if not channels:
             return Response(
                 message="No chat bridge channels configured. Use action 'add_channel' to add one.",
@@ -140,7 +144,7 @@ class DiscordChat(Tool):
             added = info.get("added_at", "unknown")
             lines.append(f"  - #{label} (ID: {ch_id}, server: {guild}, added: {added})")
 
-        status = get_bot_status()
+        status = get_bot_status(self.bot_id)
         if status.get("running"):
             lines.append(f"\nBot status: {status.get('status')} as {status.get('user', '?')}")
         else:
@@ -150,8 +154,8 @@ class DiscordChat(Tool):
 
     def _status(self) -> Response:
         """Get chat bridge status."""
-        status = get_bot_status()
-        channels = get_chat_channels()
+        status = get_bot_status(self.bot_id)
+        channels = get_chat_channels(self.bot_id)
 
         if not status.get("running"):
             msg = f"Chat bridge is **not running** (status: {status.get('status', 'stopped')})."

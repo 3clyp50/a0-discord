@@ -11,6 +11,14 @@ A full-featured Discord integration plugin for Agent Zero that enables reading, 
 | Security Assessment | Red-team pentest completed 2026-03-09 |
 | Standards Conformance | v1.1.0 |
 
+## Multiple bots
+
+Open **Config**, keep the existing bot entry, and choose **Add bot** for each additional Discord application. Each entry has its own token, enabled/auto-start switches, server and user allowlists, default preset, default agent profile, and elevation key. Save to apply changes. New bots start in read-only mode with auto-start off.
+
+The **Open** dashboard uses Agent Zero design tokens and provides independent status, start/stop/restart and connection tests. Stopping a bot pauses auto-start until it is started manually or Agent Zero restarts. Renaming a label keeps its stable ID and saved chats. Existing single-bot settings and channel mappings remain compatible; the Config page migrates them on Save. `DISCORD_BOT_TOKEN` overrides only the entry with ID `default`. An empty `bots` list does not revive legacy settings.
+
+Each bot needs a separate Discord application token and server invitation. The plugin connects bots; it does not create Discord applications. Use global plugin settings for gateway bots. Profile-scoped settings apply to agent tools, not extra gateway instances.
+
 ## Features
 
 - **Read** channels, threads, and messages from any server the bot is in
@@ -19,7 +27,8 @@ A full-featured Discord integration plugin for Agent Zero that enables reading, 
 - **Extract insights** for deep research analysis of Discord discussions
 - **Track members** with a persistent persona registry and notes
 - **Monitor channels** for new messages with automatic image analysis
-- **Chat bridge** -- mention the bot with `@Bot your message` to create a saved Agent Zero chat using the configured preset and agent profile; no channel registration required
+- **Chat bridge** -- mention the bot or reply to its messages to continue a saved Agent Zero chat using the configured preset and agent profile; no channel registration required
+- **Server context** -- read recent messages automatically and browse permitted channels, active threads, and public thread archives on demand, with message links and pagination
 
 ## Quick Start
 
@@ -170,7 +179,8 @@ usr/plugins/discord/
 ├── install.sh               # Automated installer
 ├── helpers/
 │   ├── discord_client.py    # REST API wrapper with rate limiting
-│   ├── discord_bot.py       # Chat bridge bot (direct LLM, no tools)
+│   ├── discord_bot.py       # Profile-aware chat bridge and reply routing
+│   ├── bridge_reader.py     # Server-scoped, permission-checked Discord reads
 │   ├── sanitize.py          # Security: input validation, injection defense
 │   ├── persona_registry.py  # Persistent user tracking
 │   └── poll_state.py        # Polling state tracker
@@ -190,7 +200,7 @@ This plugin has been security-hardened with multiple layers of defense. **Read t
 
 ### Core Protections
 
-- **Chat bridge privilege isolation** -- The chat bridge uses direct LLM calls (`call_chat_model`) instead of the full agent loop. In restricted mode (the default), Discord users have **zero access** to tools, code execution, file operations, or system resources. This is enforced architecturally, not by prompt instructions.
+- **Chat bridge privilege isolation** -- Read-only mode uses direct LLM calls and a dedicated Discord reader, scoped to the current server and the bot's and requesting member's permissions. Arbitrary tools, code execution, file operations, and external writes are unavailable. Full agent access still requires elevated-mode authentication.
 - **Prompt injection defense** -- Input sanitization with Unicode homoglyph normalization (NFKC), zero-width character stripping, and pattern-based injection detection.
 - **Snowflake ID validation** -- All Discord IDs are validated as 17-20 digit numbers before use in API calls.
 - **SSRF protection** -- Image downloads restricted to Discord CDN hosts only.

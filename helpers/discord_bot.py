@@ -2,8 +2,8 @@
 Listens for messages in designated channels and routes them through Agent Zero's LLM.
 
 SECURITY MODEL:
-  - Restricted mode (default): Uses call_chat_model() — NO tools, NO code execution,
-    NO file access. The LLM literally cannot perform system operations.
+  - Read-only mode (default): Uses call_chat_model() with a scoped Discord reader.
+    NO arbitrary tools, code execution, file access, or external writes.
   - Elevated mode (opt-in): Authenticated users get full agent loop access via
     context.communicate(). Requires: allow_elevated=true in config + runtime auth
     via !auth <key> in Discord. Sessions expire after a configurable timeout.
@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -31,10 +32,11 @@ except ModuleNotFoundError:
     subprocess.run([python, "-m", "pip", "install", "discord.py>=2.3,<3"], capture_output=True, check=True)
     import discord
 
-# Singleton bot instance and its dedicated event loop thread
-_bot_instance: Optional["ChatBridgeBot"] = None
-_bot_thread: Optional[threading.Thread] = None
-_bot_loop: Optional[asyncio.AbstractEventLoop] = None
+# Each bot owns its gateway loop, sessions and channel contexts.
+_bots: dict[str, "ChatBridgeBot"] = {}
+_bot_lock = threading.RLock()
+_state_lock = threading.RLock()
+_paused_bots: set[str] = set()
 
 CHAT_STATE_FILE = "chat_bridge_state.json"
 
@@ -54,60 +56,69 @@ def _get_state_path() -> Path:
     return path
 
 
-def load_chat_state() -> dict:
-    path = _get_state_path()
-    if path.exists():
-        with open(path, "r") as f:
-            return json.load(f)
-    return {"channels": {}, "contexts": {}}
+def load_chat_state(bot_id: str = "default") -> dict:
+    with _state_lock:
+        path = _get_state_path()
+        state = json.loads(path.read_text()) if path.exists() else {"channels": {}, "contexts": {}}
+        if bot_id == "default":
+            return state
+        return state.get("bots", {}).get(bot_id, {"channels": {}, "contexts": {}})
 
 
-def save_chat_state(state: dict):
+def save_chat_state(state: dict, bot_id: str = "default"):
     from usr.plugins.discord.helpers.sanitize import secure_write_json
-    secure_write_json(_get_state_path(), state)
+    with _state_lock:
+        if bot_id != "default":
+            root = load_chat_state()
+            root.setdefault("bots", {})[bot_id] = state
+            state = root
+        secure_write_json(_get_state_path(), state)
 
 
-def add_chat_channel(channel_id: str, guild_id: str = "", label: str = ""):
-    state = load_chat_state()
-    state.setdefault("channels", {})[channel_id] = {
-        "guild_id": guild_id,
-        "label": label or channel_id,
-        "added_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    save_chat_state(state)
+def add_chat_channel(channel_id: str, guild_id: str = "", label: str = "", bot_id: str = "default"):
+    with _state_lock:
+        state = load_chat_state(bot_id)
+        state.setdefault("channels", {})[channel_id] = {
+            "guild_id": guild_id, "label": label or channel_id,
+            "added_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        save_chat_state(state, bot_id)
 
 
-def remove_chat_channel(channel_id: str):
-    state = load_chat_state()
-    state.get("channels", {}).pop(channel_id, None)
-    state.get("contexts", {}).pop(channel_id, None)
-    save_chat_state(state)
+def remove_chat_channel(channel_id: str, bot_id: str = "default"):
+    with _state_lock:
+        state = load_chat_state(bot_id)
+        state.get("channels", {}).pop(channel_id, None)
+        state.get("contexts", {}).pop(channel_id, None)
+        save_chat_state(state, bot_id)
 
 
-def get_chat_channels() -> dict:
-    return load_chat_state().get("channels", {})
+def get_chat_channels(bot_id: str = "default") -> dict:
+    return load_chat_state(bot_id).get("channels", {})
 
 
-def get_context_id(channel_id: str) -> Optional[str]:
-    return load_chat_state().get("contexts", {}).get(channel_id)
+def get_context_id(channel_id: str, bot_id: str = "default") -> Optional[str]:
+    return load_chat_state(bot_id).get("contexts", {}).get(channel_id)
 
 
-def set_context_id(channel_id: str, context_id: str):
-    state = load_chat_state()
-    state.setdefault("contexts", {})[channel_id] = context_id
-    save_chat_state(state)
+def set_context_id(channel_id: str, context_id: str, bot_id: str = "default"):
+    with _state_lock:
+        state = load_chat_state(bot_id)
+        state.setdefault("contexts", {})[channel_id] = context_id
+        save_chat_state(state, bot_id)
 
 
 class ChatBridgeBot(discord.Client):
     """Discord bot that bridges messages to Agent Zero's LLM.
 
-    SECURITY: By default, uses direct LLM calls (call_chat_model) with NO
-    tool access. Authenticated users can optionally elevate to full agent loop
+    SECURITY: By default, only a scoped Discord reader is executable.
+    Authenticated users can optionally elevate to full agent loop
     access if allow_elevated is enabled in the plugin config.
     """
 
     MAX_CHAT_MESSAGE_LENGTH = 4000
     MAX_HISTORY_MESSAGES = 20
+    MAX_READ_CALLS = 8
     # Rate limit: max messages per user within the window
     RATE_LIMIT_MAX = 10
     RATE_LIMIT_WINDOW = 60  # seconds
@@ -115,23 +126,7 @@ class ChatBridgeBot(discord.Client):
     AUTH_MAX_FAILURES = 5
     AUTH_FAILURE_WINDOW = 300  # 5 minute lockout
 
-    CHAT_SYSTEM_PROMPT = (
-        "You are a friendly, helpful AI assistant chatting with users on Discord.\n\n"
-        "IMPORTANT CONSTRAINTS:\n"
-        "- You are a conversational chat bot ONLY. You have NO access to tools, files, "
-        "commands, terminals, or any system resources.\n"
-        "- If users ask you to run commands, access files, list directories, execute code, "
-        "or perform any system operations, explain that you don't have those capabilities.\n"
-        "- NEVER fabricate or make up file listings, directory contents, command outputs, "
-        "or system information. You genuinely do not have access to any of these.\n"
-        "- Be helpful, friendly, and conversational within these constraints.\n"
-        "- You can help with general knowledge, answer questions, have discussions, "
-        "write text, brainstorm ideas, and more — just not anything involving system access.\n"
-        "- Each message shows the Discord username prefix. Respond naturally to the "
-        "conversation.\n"
-    )
-
-    def __init__(self, bot_token: str):
+    def __init__(self, bot_token: str, bot_id: str = "default"):
         if not bot_token or not bot_token.strip():
             raise ValueError("Bot token must be provided to ChatBridgeBot.")
         intents = discord.Intents.default()
@@ -139,10 +134,13 @@ class ChatBridgeBot(discord.Client):
         intents.guilds = True
         super().__init__(intents=intents)
         self.bot_token = bot_token
+        self.bot_id = bot_id
+        self._thread = None
+        self._gateway_loop = None
+        self._stop_requested = False
         # Per-user rate limiting: user_id -> deque of timestamps
         self._rate_limits: dict[str, collections.deque] = {}
-        # Per-channel conversation history (in-memory, lost on restart)
-        self._conversations: dict[str, list[dict]] = {}
+        self._channel_locks: dict[str, asyncio.Lock] = {}
         # Elevated session tracking: "{user_id}:{channel_id}" -> {"at": float, "name": str}
         self._elevated_sessions: dict[str, dict] = {}
         # Failed auth attempt tracking: user_id -> deque of timestamps
@@ -166,9 +164,9 @@ class ChatBridgeBot(discord.Client):
         """Load the Discord plugin configuration."""
         try:
             from usr.plugins.discord.helpers.discord_client import get_discord_config
-            return get_discord_config()
+            return get_discord_config(bot_id=self.bot_id)
         except Exception:
-            return {}
+            return {"bot": {"enabled": False}}
 
     def _get_chat_bridge_defaults(self) -> tuple[str, str]:
         """Return configured default preset and agent profile for Discord bridge chats."""
@@ -182,7 +180,8 @@ class ChatBridgeBot(discord.Client):
         """Build initialize_agent override settings from bridge defaults."""
         _, profile = self._get_chat_bridge_defaults()
         if profile:
-            return {"agent_profile": profile}
+            from usr.plugins.discord.helpers.discord_client import resolve_agent_profile
+            return {"agent_profile": resolve_agent_profile(profile)}
         return {}
 
     def _apply_bridge_context_defaults(self, context) -> None:
@@ -199,18 +198,22 @@ class ChatBridgeBot(discord.Client):
         from helpers import persist_chat
         from helpers.state_monitor_integration import mark_dirty_all
 
-        context = AgentContext.get(get_context_id(channel_id) or "")
+        context = AgentContext.get(get_context_id(channel_id, self.bot_id) or "")
         if context is None:
             context = AgentContext(
                 config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
                 type=AgentContextType.USER,
                 name=f"Discord #{getattr(message.channel, 'name', channel_id)}",
             )
+            if self.bot_id != "default":
+                name = self._get_config().get("bot", {}).get("name") or self.bot_id
+                context.name = f"Discord {name} #{getattr(message.channel, 'name', channel_id)}"
+            context.set_data("discord_bot_id", self.bot_id)
             self._apply_bridge_context_defaults(context)
             persist_chat.save_tmp_chat(context)
-            set_context_id(channel_id, context.id)
-            self._conversations.pop(channel_id, None)
+            set_context_id(channel_id, context.id, self.bot_id)
             mark_dirty_all(reason="discord.chat_created")
+        context.set_data("discord_bot_id", self.bot_id)
         return context
 
     # ------------------------------------------------------------------
@@ -240,36 +243,18 @@ class ChatBridgeBot(discord.Client):
         return True
 
     def _get_auth_key(self, config: dict) -> str:
-        """Get the auth key from config, auto-generating if needed."""
         bridge_config = config.get("chat_bridge", {})
-        auth_key = bridge_config.get("auth_key", "")
-
-        if not auth_key and bridge_config.get("allow_elevated", False):
-            # Auto-generate a key and persist it
+        key = bridge_config.get("auth_key", "")
+        if not key and bridge_config.get("allow_elevated", False):
+            from usr.plugins.discord.helpers.discord_client import persist_auth_key
             from usr.plugins.discord.helpers.sanitize import generate_auth_key
-            auth_key = generate_auth_key()
-            bridge_config["auth_key"] = auth_key
-            config["chat_bridge"] = bridge_config
             try:
-                from usr.plugins.discord.helpers.discord_client import get_discord_config
-                from usr.plugins.discord.helpers.sanitize import secure_write_json
-                # Find and update the config file
-                config_candidates = [
-                    Path("/a0/usr/plugins/discord/config.json"),
-                    Path("/a0/plugins/discord/config.json"),
-                    Path(__file__).parent.parent / "config.json",
-                ]
-                for cp in config_candidates:
-                    if cp.exists():
-                        existing = json.loads(cp.read_text())
-                        existing.setdefault("chat_bridge", {})["auth_key"] = auth_key
-                        secure_write_json(cp, existing)
-                        logger.info("Auto-generated auth key for elevated mode")
-                        break
-            except Exception as e:
-                logger.warning(f"Could not persist auto-generated auth key: {type(e).__name__}")
-
-        return auth_key
+                key = generate_auth_key()
+                persist_auth_key(key, self.bot_id)
+            except Exception:
+                logger.exception("Could not persist Discord auth key for bot %s", self.bot_id)
+                return ""
+        return key
 
     # ------------------------------------------------------------------
     # Auth command handling
@@ -288,9 +273,11 @@ class ChatBridgeBot(discord.Client):
             key = self._session_key(user_id, channel_id)
             if key in self._elevated_sessions:
                 del self._elevated_sessions[key]
-                # Clear conversation history so restricted mode starts fresh
-                self._conversations.pop(channel_id, None)
-                await message.channel.send("Session ended. Back to restricted mode.")
+                from agent import AgentContext
+                context = AgentContext.get(get_context_id(channel_id, self.bot_id) or "")
+                if context:
+                    context.set_data("discord_bridge_history", [])
+                await message.channel.send("Session ended. Back to read-only mode.")
                 logger.info(f"Elevated session ended: user={user_id} channel={channel_id}")
             else:
                 await message.channel.send("No active elevated session.")
@@ -317,11 +304,11 @@ class ChatBridgeBot(discord.Client):
                 elevated_available = config.get("chat_bridge", {}).get("allow_elevated", False)
                 if elevated_available:
                     await message.channel.send(
-                        "Mode: **Restricted** (chat only). Use `!auth <key>` to elevate."
+                        "Mode: **Read-only** (Discord history access). Use `!auth <key>` to elevate."
                     )
                 else:
                     await message.channel.send(
-                        "Mode: **Restricted** (chat only). Elevated mode is not enabled."
+                        "Mode: **Read-only** (Discord history access). Elevated mode is not enabled."
                     )
             return True
 
@@ -415,22 +402,34 @@ class ChatBridgeBot(discord.Client):
 
         return normalized.replace(direct, "").replace(nickname, "").strip()
 
+    async def _replied_message(self, message):
+        reference = getattr(message, "reference", None)
+        if not reference or reference.channel_id != message.channel.id:
+            return None
+        resolved = reference.resolved or reference.cached_message
+        if isinstance(resolved, discord.Message):
+            return resolved
+        try:
+            resolved = await message.channel.fetch_message(reference.message_id)
+            reference.resolved = resolved
+            return resolved
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
     async def on_message(self, message: discord.Message):
         # Ignore own messages and other bots
         if message.author.bot:
             return
 
         channel_id = str(message.channel.id)
-        chat_channels = get_chat_channels()
+        chat_channels = get_chat_channels(self.bot_id)
         user_text = self._strip_bot_mentions(message.content)
         mentioned = user_text != message.content.strip()
 
-        # Mentions work without registering a channel for every-message replies.
-        if channel_id not in chat_channels and not mentioned:
-            return
-
         # Mentions never bypass server or user restrictions.
         config = self._get_config()
+        if not config.get("bot", {}).get("enabled", True):
+            return
         allowed_servers = config.get("servers", [])
         if allowed_servers and (
             message.guild is None
@@ -439,6 +438,11 @@ class ChatBridgeBot(discord.Client):
             return
         allowed_users = config.get("chat_bridge", {}).get("allowed_users", [])
         if allowed_users and str(message.author.id) not in [str(u) for u in allowed_users]:
+            return
+
+        replied = await self._replied_message(message)
+        replies_to_bot = replied is not None and self.user is not None and replied.author.id == self.user.id
+        if channel_id not in chat_channels and not mentioned and not replies_to_bot:
             return
 
         if mentioned and not user_text:
@@ -476,14 +480,10 @@ class ChatBridgeBot(discord.Client):
             return
         timestamps.append(now)
 
-        # Route based on elevation status
-        user_id = str(message.author.id)
-        is_elevated = self._is_elevated(user_id, channel_id)
-
-        # Show typing while processing
-        async with message.channel.typing():
+        # Serialize turns so replies cannot overwrite history or become interventions.
+        async with self._channel_locks.setdefault(channel_id, asyncio.Lock()), message.channel.typing():
             try:
-                if is_elevated:
+                if self._is_elevated(str(message.author.id), channel_id):
                     response_text = await self._get_elevated_response(
                         channel_id, user_text, message
                     )
@@ -491,31 +491,30 @@ class ChatBridgeBot(discord.Client):
                     response_text = await self._get_agent_response(
                         channel_id, user_text, message
                     )
-            except Exception as e:
-                logger.error(f"Agent error: {type(e).__name__}")
+            except Exception:
+                logger.exception("Discord message processing failed in channel %s", channel_id)
                 response_text = "An error occurred while processing your message."
 
-        # Send response, splitting if needed
-        await self._send_response(message.channel, response_text, reference=message)
+            await self._send_response(message.channel, response_text, reference=message)
 
     # ------------------------------------------------------------------
-    # Restricted mode: direct LLM call, NO tools
+    # Read-only mode: profile-aware conversation and scoped Discord reading
     # ------------------------------------------------------------------
 
     async def _get_agent_response(self, channel_id: str, text: str, message: discord.Message) -> str:
-        """Get LLM response via direct model call (no agent loop, no tools).
-
-        SECURITY: This intentionally bypasses the full agent loop. The LLM is
-        called directly via call_chat_model(), which provides NO tool access.
-        This prevents privilege escalation from untrusted Discord users.
-        """
+        """Use the selected profile/model with only the bounded Discord reader."""
         try:
-            from agent import UserMessage
-            from helpers import persist_chat, message_queue
-            from langchain_core.messages import HumanMessage, SystemMessage
+            from agent import LoopData, UserMessage
+            from helpers import persist_chat, message_queue, extract_tools
+            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+            from plugins._model_config.helpers import model_config
+            from usr.plugins.discord.helpers.bridge_reader import BridgeReader
 
             context = self._get_bridge_context(channel_id, message)
             agent = context.agent0
+            # Restored chats have not entered monologue(), which creates loop state.
+            if not hasattr(agent, "loop_data"):
+                agent.loop_data = LoopData()
 
             # Sanitize external content
             from usr.plugins.discord.helpers.sanitize import sanitize_content, sanitize_username
@@ -528,43 +527,73 @@ class ChatBridgeBot(discord.Client):
             message_queue.log_user_message(context, visible_text, [], source=" (Discord)")
             persist_chat.save_tmp_chat(context)
 
-            # Maintain per-channel conversation history
-            if channel_id not in self._conversations:
-                self._conversations[channel_id] = []
-            history = self._conversations[channel_id]
-            history.append({"role": "user", "name": author_name, "content": safe_text})
-
-            # Trim to max history length
-            if len(history) > self.MAX_HISTORY_MESSAGES:
-                self._conversations[channel_id] = history[-self.MAX_HISTORY_MESSAGES:]
-                history = self._conversations[channel_id]
-
-            # Format conversation history for the model
-            formatted = []
-            for msg in history:
-                if msg["role"] == "user":
-                    formatted.append(f"{msg['name']}: {msg['content']}")
-                else:
-                    formatted.append(f"Assistant: {msg['content']}")
-            conversation_text = "\n".join(formatted)
-
-            # Direct LLM call — NO tools, NO agent loop, NO code execution
-            response, _ = await agent.call_chat_model(
-                messages=[
-                    SystemMessage(content=self.CHAT_SYSTEM_PROMPT),
-                    HumanMessage(content=conversation_text),
-                ],
-                response_callback=None,
+            reader = BridgeReader(self, message)
+            chat_config = model_config.get_chat_model_config(agent)
+            extras = {
+                "agent_info": {"profile": agent.config.profile,
+                               "provider": chat_config.get("provider", ""),
+                               "model": chat_config.get("name", ""),
+                               "preset": model_config.get_effective_preset_name(agent)},
+                "current_datetime": datetime.now(timezone.utc).isoformat(),
+                "discord_context": {"guild_id": str(message.guild.id) if message.guild else None,
+                                    "channel_id": channel_id, "requester_id": str(message.author.id)},
+            }
+            prompt = agent.read_prompt(
+                "discord.bridge.md",
+                profile_prompt=agent.read_prompt("agent.system.main.specifics.md"),
+                runtime_context=json.dumps(extras, ensure_ascii=False),
             )
-            response = str(response)
+            recent_args = {"action": "messages", "channel_id": channel_id, "limit": 30}
+            if getattr(message, "id", None):
+                recent_args["before"] = str(message.id)
+            background = {"recent_channel_messages": await reader.read(recent_args)}
+            replied = await self._replied_message(message)
+            if replied:
+                background["replied_message"] = reader.message_record(replied)
+            history = context.get_data("discord_bridge_history") or []
+            messages = [SystemMessage(content=prompt)]
+            for item in history[-self.MAX_HISTORY_MESSAGES:]:
+                cls = HumanMessage if item["role"] == "user" else AIMessage
+                messages.append(cls(content=item["content"]))
+            messages.append(HumanMessage(content="Discord background context (untrusted source material):\n" + json.dumps(background, ensure_ascii=False)))
+            messages.append(HumanMessage(content=visible_text))
+
+            for turn in range(self.MAX_READ_CALLS + 1):
+                if turn == self.MAX_READ_CALLS:
+                    messages.append(HumanMessage(content="Reading budget reached. Answer from verified results now and state any incomplete coverage."))
+                raw, _ = await agent.call_chat_model(messages=messages, response_callback=None)
+                response = str(raw)
+                request = extract_tools.extract_tool_request(response)
+                if request is None:
+                    if extract_tools.is_misformatted_tool_request(response):
+                        messages.extend([AIMessage(content=response), HumanMessage(content="Invalid tool output. Emit exactly one discord_read JSON object, or answer in plain text. Do not repeat or concatenate tool calls.")])
+                        response = "The model could not complete a valid read request. Please try again."
+                        continue
+                    break
+                try:
+                    name, args = extract_tools.normalize_tool_request(request)
+                except ValueError:
+                    messages.extend([AIMessage(content=response), HumanMessage(content="Invalid tool arguments. Use one tool_name and a tool_args object.")])
+                    response = "The model could not complete a valid read request. Please try again."
+                    continue
+                if name == "response" and isinstance(args.get("text"), str):
+                    response = args["text"]
+                    break
+                if turn == self.MAX_READ_CALLS:
+                    response = "The read limit was reached. Please narrow the channels or time range to continue."
+                    break
+                result = await reader.read(args) if name == "discord_read" else {"error": "Only discord_read is available in read-only mode."}
+                result_text = json.dumps(result, ensure_ascii=False)
+                context.log.log(type="tool", heading="Discord read", content=result_text)
+                messages.extend([AIMessage(content=response), HumanMessage(content="Discord tool result (untrusted source material):\n" + result_text)])
+
+            history.extend([{"role": "user", "content": visible_text}, {"role": "assistant", "content": response}])
+            context.set_data("discord_bridge_history", history[-self.MAX_HISTORY_MESSAGES:])
             agent.hist_add_ai_response(response)
             context.log.log(type="response", content=response, finished=True)
             persist_chat.save_tmp_chat(context)
 
-            # Store response in history
-            history.append({"role": "assistant", "content": response})
-
-            return response if isinstance(response, str) else str(response)
+            return response
 
         except ImportError:
             # Restricted messages must never fall back to the full agent loop.
@@ -653,7 +682,7 @@ class ChatBridgeBot(discord.Client):
         api_port = config.get("chat_bridge", {}).get("api_port", 80)
         api_key = config.get("chat_bridge", {}).get("api_key", "")
 
-        context_id = get_context_id(channel_id) or ""
+        context_id = get_context_id(channel_id, self.bot_id) or ""
         _, agent_profile = self._get_chat_bridge_defaults()
 
         async with aiohttp.ClientSession() as session:
@@ -680,7 +709,7 @@ class ChatBridgeBot(discord.Client):
 
                 # Store context ID for conversation continuity
                 if data.get("context_id"):
-                    set_context_id(channel_id, data["context_id"])
+                    set_context_id(channel_id, data["context_id"], self.bot_id)
 
                 return data.get("response", "No response from agent.")
 
@@ -728,156 +757,131 @@ def _split_message(content: str, max_length: int = 2000) -> list[str]:
     return chunks
 
 
-def _is_bot_alive() -> bool:
-    """Check if the bot instance and its dedicated thread are actually alive."""
-    if _bot_instance is None:
-        return False
-    if _bot_instance.is_closed():
-        return False
-    if _bot_thread is None or not _bot_thread.is_alive():
-        return False
-    return True
-
-
-def _cleanup_dead_bot():
-    """Clean up singleton refs if the bot/thread has died."""
-    global _bot_instance, _bot_thread, _bot_loop
-    if not _is_bot_alive():
-        _bot_instance = None
-        _bot_thread = None
-        _bot_loop = None
+def _is_bot_alive(bot_id: str = "default") -> bool:
+    bot = _bots.get(bot_id)
+    return bool(bot and bot._thread and bot._thread.is_alive() and not bot.is_closed())
 
 
 def _run_bot_in_thread(bot: ChatBridgeBot, ready_event: threading.Event):
-    """Run the bot in a dedicated thread with its own event loop.
-
-    This is necessary because A0's Flask/WSGIMiddleware runs API handlers
-    in request-scoped event loops that are destroyed when the request ends.
-    The bot needs a persistent event loop to maintain the Discord gateway
-    websocket connection.
-    """
-    global _bot_instance, _bot_thread, _bot_loop
-
-    loop = asyncio.new_event_loop()
+    """Gateway loops must outlive Flask's request-scoped event loops."""
+    loop = bot._gateway_loop
     asyncio.set_event_loop(loop)
-    _bot_loop = loop
-
-    # Give the bot a reference to the threading.Event so on_ready can signal it
     bot._ready_event = ready_event
 
+    async def connect():
+        async with bot:
+            if not bot._stop_requested:
+                await bot.start(bot.bot_token)
+
     try:
-        # bot.start() is a coroutine that logs in and connects to the gateway.
-        # It blocks (within run_until_complete) until the bot is closed.
-        loop.run_until_complete(bot.start(bot.bot_token))
-    except Exception as e:
-        logger.error(f"Chat bridge bot exited with error: {type(e).__name__}: {e}")
+        loop.run_until_complete(connect())
+    except Exception as exc:
+        logger.error("Discord bot %s exited: %s", bot.bot_id, type(exc).__name__)
     finally:
-        logger.info("Chat bridge bot thread ending, cleaning up singleton")
-        ready_event.set()  # Unblock caller if on_ready never fired
-        _bot_instance = None
-        _bot_thread = None
-        _bot_loop = None
-        try:
-            loop.close()
-        except Exception:
-            pass
+        ready_event.set()
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
 
 
-async def start_chat_bridge(bot_token: str) -> ChatBridgeBot:
-    """Start the chat bridge bot in a dedicated background thread."""
-    global _bot_instance, _bot_thread, _bot_loop
-
+def _start_bridge(bot_token: str, bot_id: str) -> ChatBridgeBot:
     if not bot_token or not bot_token.strip():
-        raise ValueError("Cannot start chat bridge: bot token is empty or not configured.")
-
-    # Clean up any dead instance before checking
-    _cleanup_dead_bot()
-
-    if _bot_instance and _is_bot_alive():
-        return _bot_instance
-
-    # Force-close any leftover instance
-    if _bot_instance:
-        try:
-            if not _bot_instance.is_closed():
-                if _bot_loop and _bot_loop.is_running():
-                    asyncio.run_coroutine_threadsafe(_bot_instance.close(), _bot_loop).result(timeout=5)
-                else:
-                    await _bot_instance.close()
-        except Exception:
-            pass
-        _bot_instance = None
-        _bot_thread = None
-        _bot_loop = None
-
-    bot = ChatBridgeBot(bot_token)
-    _bot_instance = bot
-
-    # Start the bot in a dedicated daemon thread
-    ready_event = threading.Event()
-    thread = threading.Thread(
-        target=_run_bot_in_thread,
-        args=(bot, ready_event),
-        daemon=True,
-        name="discord-chat-bridge",
-    )
-    _bot_thread = thread
-    thread.start()
-
-    # Wait for the bot to be ready (or timeout)
-    ready_event.wait(timeout=35)
-
-    if not bot.is_ready():
-        logger.warning("Bot started but may not be fully ready yet")
-
+        raise ValueError("Cannot start chat bridge: no bot token configured.")
+    token = bot_token.strip()
+    with _bot_lock:
+        existing = _bots.get(bot_id)
+        if existing and existing._thread and existing._thread.is_alive():
+            if existing.bot_token != token:
+                raise ValueError("This bot's token changed. Restart its bridge to apply it.")
+            _paused_bots.discard(bot_id)
+            return existing
+        if any(bot.bot_id != bot_id and bot.bot_token == token and _is_bot_alive(bot.bot_id)
+               for bot in _bots.values()):
+            raise ValueError("This bot token is already running under another bot ID.")
+        bot = ChatBridgeBot(token, bot_id)
+        bot._gateway_loop = asyncio.new_event_loop()
+        ready = threading.Event()
+        bot._thread = threading.Thread(
+            target=_run_bot_in_thread, args=(bot, ready), daemon=True,
+            name=f"discord-chat-{bot_id}",
+        )
+        _bots[bot_id] = bot
+        _paused_bots.discard(bot_id)
+        bot._thread.start()
+    ready.wait(timeout=35)
+    if not bot._thread.is_alive():
+        raise ValueError("Discord bot failed to connect. Check its token and gateway intents.")
     return bot
 
 
-async def stop_chat_bridge():
-    """Stop the chat bridge bot."""
-    global _bot_instance, _bot_thread, _bot_loop
+async def start_chat_bridge(bot_token: str, bot_id: str = "default") -> ChatBridgeBot:
+    return await asyncio.to_thread(_start_bridge, bot_token, bot_id)
 
-    if _bot_instance and not _bot_instance.is_closed():
-        if _bot_loop and _bot_loop.is_running():
-            # Schedule close() on the bot's own event loop
-            future = asyncio.run_coroutine_threadsafe(_bot_instance.close(), _bot_loop)
+
+def _stop_bridge(bot_id: str, pause: bool):
+    with _bot_lock:
+        if pause:
+            _paused_bots.add(bot_id)
+        bot = _bots.get(bot_id)
+        if bot is None:
+            return
+        bot._stop_requested = True
+        loop = bot._gateway_loop
+        if bot._thread and bot._thread.is_alive() and loop and not loop.is_closed():
+            future = asyncio.run_coroutine_threadsafe(bot.close(), loop)
             try:
                 future.result(timeout=10)
             except Exception:
-                pass
-        else:
+                logger.warning("Discord bot %s is still shutting down", bot_id)
+            bot._thread.join(timeout=5)
+            if bot._thread.is_alive():
+                raise TimeoutError("Discord bot is still stopping. Try again shortly.")
+        _bots.pop(bot_id, None)
+
+
+async def stop_chat_bridge(bot_id: str = "default", pause: bool = True):
+    await asyncio.to_thread(_stop_bridge, bot_id, pause)
+
+
+def get_bot_status(bot_id: str = "default") -> dict:
+    with _bot_lock:
+        bot = _bots.get(bot_id)
+        status = {"running": False, "status": "stopped", "paused": bot_id in _paused_bots}
+        if bot is None:
+            return status
+        if not _is_bot_alive(bot_id):
+            return {**status, "status": "stopped" if bot._stop_requested else "disconnected"}
+        if bot.is_ready():
+            return {**status, "running": True, "status": "connected", "user": str(bot.user),
+                    "user_id": str(bot.user.id), "guilds": len(bot.guilds)}
+        return {**status, "running": True, "status": "connecting"}
+
+
+async def sync_chat_bridges(bots: list[dict]):
+    """Apply removals/token rotations; manual pauses last until process restart."""
+    configs = {bot["id"]: bot for bot in bots}
+    with _bot_lock:
+        running = list(_bots.items())
+    for bot_id, instance in running:
+        config = configs.get(bot_id)
+        if not config or not config.get("enabled", True) or not config.get("token"):
+            await stop_chat_bridge(bot_id, pause=False)
+        elif instance.bot_token != config["token"].strip():
+            await stop_chat_bridge(bot_id, pause=False)
+            if bot_id not in _paused_bots:
+                await start_chat_bridge(config["token"], bot_id)
+    for config in bots:
+        bot_id = config["id"]
+        if (config.get("enabled", True) and config.get("token")
+                and config.get("chat_bridge", {}).get("auto_start", False)
+                and bot_id not in _paused_bots):
             try:
-                await _bot_instance.close()
+                if bot_id == "default":
+                    await start_chat_bridge(config["token"])
+                else:
+                    await start_chat_bridge(config["token"], bot_id)
             except Exception:
-                pass
-
-    # Wait for thread to finish
-    if _bot_thread and _bot_thread.is_alive():
-        _bot_thread.join(timeout=5)
-
-    _bot_instance = None
-    _bot_thread = None
-    _bot_loop = None
-
-
-def get_bot_status() -> dict:
-    """Get current bot status."""
-    # Detect and clean up dead bot tasks
-    _cleanup_dead_bot()
-
-    if _bot_instance is None:
-        return {"running": False, "status": "stopped"}
-    if _bot_instance.is_closed():
-        return {"running": False, "status": "closed"}
-    if _bot_thread and not _bot_thread.is_alive():
-        return {"running": False, "status": "crashed"}
-    if _bot_instance.is_ready():
-        user = _bot_instance.user
-        return {
-            "running": True,
-            "status": "connected",
-            "user": str(user),
-            "user_id": str(user.id) if user else None,
-            "guilds": len(_bot_instance.guilds),
-        }
-    return {"running": True, "status": "connecting"}
+                logger.exception("Discord bot %s auto-start failed", bot_id)

@@ -5,6 +5,11 @@
 bot:
   token: ""
 
+# null keeps legacy bot/chat_bridge settings until the Config page is saved.
+# [] explicitly removes all configured bots. IDs stay unchanged on rename.
+# Each bot has: id, name, token, enabled, servers, and chat_bridge settings.
+bots: null
+
 user:
   token: ""
   read_only: true
@@ -48,7 +53,7 @@ chat_bridge:
 
   # Elevated mode: allows authenticated users to access the full Agent Zero
   # agent loop (with tools, code execution, file access, etc.) via Discord.
-  # Default is restricted mode (conversation only, no tools).
+  # Default is read-only mode (Discord channel/thread reading, no system access).
   allow_elevated: false
   # Auth key for elevated mode. Auto-generated on first use if left empty.
   # Shown in WebUI settings. Required to authenticate via !auth <key> in Discord.

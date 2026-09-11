@@ -1,14 +1,8 @@
-"""API endpoint: Discord plugin custom actions.
-URL: POST /api/plugins/discord/discord_config_api
-
-Config load/save is handled by A0's built-in plugin settings framework.
-This endpoint only handles actions that need server-side logic (key generation).
-"""
+"""Key generation; configuration uses Agent Zero's settings framework."""
 from helpers.api import ApiHandler, Request, Response
 
 
 class DiscordConfigApi(ApiHandler):
-
     @classmethod
     def get_methods(cls) -> list[str]:
         return ["POST"]
@@ -18,38 +12,14 @@ class DiscordConfigApi(ApiHandler):
         return True
 
     async def process(self, input: dict, request: Request) -> dict | Response:
-        action = input.get("action", "")
-        if action == "generate_auth_key":
-            return self._generate_auth_key()
-        return {"error": "Unknown action"}
-
-    def _generate_auth_key(self) -> dict:
-        """Generate a new random auth key and persist it to config.json.
-
-        Persisting immediately ensures the bridge reads the same key the
-        user sees in the UI, even if the outer Save button hasn't been
-        clicked yet.
-        """
+        if input.get("action") != "generate_auth_key":
+            return {"error": "Unknown action"}
+        from usr.plugins.discord.helpers.discord_client import persist_auth_key
+        from usr.plugins.discord.helpers.sanitize import generate_auth_key
         try:
-            from pathlib import Path
-            import json
-            from usr.plugins.discord.helpers.sanitize import generate_auth_key, secure_write_json
-
             key = generate_auth_key()
-
-            # Persist to config.json so the bridge picks it up immediately
-            config_candidates = [
-                Path("/a0/usr/plugins/discord/config.json"),
-                Path("/a0/plugins/discord/config.json"),
-                Path(__file__).parent.parent / "config.json",
-            ]
-            for cp in config_candidates:
-                if cp.exists():
-                    existing = json.loads(cp.read_text())
-                    existing.setdefault("chat_bridge", {})["auth_key"] = key
-                    secure_write_json(cp, existing)
-                    break
-
+            if not input.get("draft", False):
+                persist_auth_key(key, input.get("bot_id", "default"))
             return {"auth_key": key}
         except Exception:
             return {"error": "Failed to generate auth key."}

@@ -1,8 +1,12 @@
 # Chat Bridge Configuration Guide
 
-Use Discord as a real-time chat frontend to Agent Zero's LLM. Mention the bot with `@Bot your message` in an allowed server to create a chat, without registering a channel first. Later mentions in the same channel reuse that chat. Mentioning only `@Bot` starts with a greeting.
+Use Discord as a real-time chat frontend to Agent Zero's LLM. Mention the bot with `@Bot your message` in an allowed server to create a chat, without registering a channel first. Later mentions or Discord replies to the bot in the same channel reuse that chat, even when reply notifications are disabled. Mentioning only `@Bot` starts with a greeting.
 
-The chat appears in Agent Zero's sidebar as `Discord #channel`, with saved messages and replies. New chats use the configured default preset and agent profile. Restricted mode remains chat-only; tool access still requires elevated-mode authentication.
+The chat appears in Agent Zero's sidebar as `Discord #channel`, with saved messages and replies. New chats use the configured default preset and agent profile. Read-only mode includes the profile instructions and actual model, preset, profile, time, and Discord context. Shell access and publishing still require elevated-mode authentication.
+
+Each request includes the latest 30 channel messages and any replied-to message. The model can make up to eight further read requests, list readable server channels, read messages with source links, and browse active and public archived threads. History pages contain at most 100 messages and 40,000 serialized characters. Pagination cursors indicate partial coverage; the entire server is not loaded into every prompt.
+
+Reads remain within the current allowed server and require both the bot and requesting member to have channel visibility and Read Message History permission. Private threads also require membership unless the member can manage threads. Authentication commands are excluded from model context. Read access never falls back to a user token.
 
 Enable **Auto-start chat bridge** to connect at startup, even with no registered channels. The background job loop also picks up this setting within a minute. Channels registered through `discord_chat` additionally receive replies to messages without a mention; mentioning a bot does not register the channel for this behavior.
 
@@ -10,9 +14,24 @@ Run the mention regression check in the Agent Zero framework environment from `/
 
 ```bash
 /opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_mentions
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_bridge_reader
 ```
 
 ---
+
+## Multiple bots
+
+In Config, add a bot entry for each Discord application and choose its preset/profile and access rules. Save, then use Open to start it or enable its auto-start setting. Every bot has its own gateway connection, rate limits, authentication sessions, registered channels and channel-to-chat mappings, even when bots share a Discord channel. Existing single-bot chats stay in the `default` namespace. A local label change never changes the stable bot ID.
+
+Pass `bot_id` to any `discord_chat` action to select a bot. Without it, commands use the current Discord chat's bot, or the first enabled configured bot for ordinary Agent Zero chats. Removed bots stop on the next background tick; their saved chats are retained.
+
+The Open dashboard shows saved defaults for **new** chats; existing chats retain their selected model/profile. Stop pauses auto-start for the current Agent Zero process; Start or Restart resumes it.
+
+Runnable isolation check (does not contact Discord):
+
+```bash
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_multi_bot
+```
 
 ## How the Chat Bridge Works
 
@@ -24,7 +43,7 @@ Discord Gateway (WebSocket) ---> ChatBridgeBot (discord.py)
     |
     v
 on_message() handler checks:
-  1. Is the bot mentioned, or is this a designated chat channel? (skip if neither)
+  1. Is the bot mentioned, replied to, or is this a designated chat channel? (skip otherwise)
   2. Is the author a bot? (skip bots)
   3. Are the server and author allowed? (silently ignore if not)
   4. Is this an auth/deauth command? (handle separately)
@@ -37,12 +56,12 @@ Show typing indicator in Discord
     v
 Route based on session state:
   - Elevated session active -> full Agent Zero agent loop
-  - Otherwise -> preset's main chat model (conversation only, no tools)
+  - Otherwise -> preset's main chat model with scoped read-only Discord access
     |
     v
 Create/retrieve AgentContext for this channel
   - New chats use the bridge's default preset and agent profile
-  - Restricted messages and replies are saved to history and the WebUI log
+  - Messages and replies are saved to history and the WebUI log
   - Image attachments: saved to temp files and forwarded as file paths
   - Each channel has its own conversation context (independent history)
     |
@@ -63,7 +82,7 @@ The chat bridge is designed with a **defense-in-depth** approach. Multiple indep
 
 ### Privilege Isolation (Architectural)
 
-By default, the chat bridge operates in **restricted mode**: Discord messages are processed via a direct LLM call (`call_chat_model`) using the selected preset's main chat model, with zero access to Agent Zero's tools, code execution, file system, or any other system resources. This isolation is enforced at the code level, not through prompt instructions -- even a successful prompt injection cannot escalate privileges in restricted mode.
+By default, the chat bridge operates in **read-only mode**: Discord messages use the selected preset's main model and profile instructions. The only executable operation is the dedicated Discord reader; every other tool request is rejected in code. Read-only conversations cannot run commands, access local files, submit issues, or create PRs. Runtime metadata is supplied explicitly so the model can identify its provider/model and explain the bridge's extras without guessing.
 
 ### User Allowlist (Access Control)
 
@@ -384,10 +403,10 @@ Or set it in config:
 }
 ```
 
-Auto-start only activates when all three conditions are met:
+Auto-start activates when these conditions are met:
 1. A bot token is configured
 2. `chat_bridge.auto_start` is `true`
-3. At least one channel is registered
+3. The Discord plugin is enabled; no registered channels are required
 
 ---
 
@@ -437,13 +456,13 @@ The next message in that channel will create a new conversation context.
 ## Behavior Details
 
 ### Message Routing
-- Only messages in explicitly registered channels are processed
+- Mentions, replies to the bot, and messages in registered channels are processed
 - Bot messages are ignored (prevents loops)
 - Users not on the allowlist are silently ignored (when allowlist is configured)
 - Empty messages are ignored
-- Messages are prefixed with `[Discord - DisplayName]:` for LLM context
+- Read-only user messages include their Discord display name for context
 - If the user has an active elevated session, messages route through the full agent loop
-- Otherwise, messages route through the preset's main chat model (conversation only, no tools)
+- Otherwise, messages route through the preset's main model with scoped read-only Discord access
 
 ### Image Handling
 When a user sends an image attachment in a chat bridge channel:
@@ -513,7 +532,7 @@ Only one bot instance runs at a time. `start_chat_bridge()` checks if a bot is a
 ### Bot connects but doesn't respond to messages
 
 1. **User not on allowlist** — If `chat_bridge.allowed_users` is configured, only listed user IDs get responses. Check the allowlist in WebUI Settings or `config.json`.
-2. **Channel not registered** — The bot only responds in channels added via `discord_chat add_channel`. Check with `discord_chat list`.
+2. **No trigger** — Mention the bot or reply to one of its messages. Register a channel with `discord_chat add_channel` only if every message should receive a reply.
 3. **Missing Message Content intent** — Enable it in Developer Portal > Bot > Privileged Gateway Intents.
 4. **Bot doesn't have channel access** — Ensure the bot role has View Channel + Read Message History + Send Messages in the target channel.
 

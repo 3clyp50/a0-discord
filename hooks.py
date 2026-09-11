@@ -116,15 +116,52 @@ def save_plugin_config(settings: dict, **kwargs) -> dict:
     If allow_elevated is enabled and no auth_key exists, generate one
     immediately so the key is available in the UI without a bridge restart.
     """
-    bridge = settings.get("chat_bridge", {})
-    if bridge.get("allow_elevated", False) and not bridge.get("auth_key", ""):
-        try:
-            from usr.plugins.discord.helpers.sanitize import generate_auth_key
+    import re
+    from usr.plugins.discord.helpers.discord_client import get_bot_configs, resolve_agent_profile
+    from usr.plugins.discord.helpers.sanitize import generate_auth_key
+
+    bots = get_bot_configs(settings)
+    if not isinstance(bots, list):
+        raise ValueError("Discord bots must be a list.")
+    ids, tokens = set(), set()
+    for bot in bots:
+        if not isinstance(bot, dict) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(bot.get("id", ""))):
+            raise ValueError("Each Discord bot needs a stable ID (letters, digits, underscore or hyphen).")
+        if bot["id"] in ids:
+            raise ValueError("Discord bot IDs must be unique.")
+        ids.add(bot["id"])
+        bot["name"] = str(bot.get("name", "") or "").strip() or bot["id"]
+        token = str(bot.get("token", "") or "").strip()
+        if token and token in tokens:
+            raise ValueError("Each Discord bot needs its own token. This token is already configured.")
+        if token:
+            tokens.add(token)
+        bot["token"] = token
+        if not isinstance(bot.get("enabled", True), bool):
+            raise ValueError("Discord bot enabled must be true or false.")
+        bridge = bot.setdefault("chat_bridge", {})
+        if not isinstance(bridge, dict):
+            raise ValueError("Discord chat bridge settings must be an object.")
+        for owner, field in ((bot, "servers"), (bridge, "allowed_users")):
+            values = owner.get(field, [])
+            if not isinstance(values, list) or any(not str(value).isdigit() for value in values):
+                raise ValueError("Discord server and user allowlists must contain numeric IDs.")
+            owner[field] = [str(value) for value in values]
+        for field in ("auto_start", "allow_elevated"):
+            if not isinstance(bridge.get(field, False), bool):
+                raise ValueError(f"Discord {field} must be true or false.")
+        timeout = bridge.get("session_timeout", 3600)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 0:
+            raise ValueError("Discord session timeout must be a non-negative integer.")
+        bridge["default_agent_profile"] = resolve_agent_profile(
+            bridge.get("default_agent_profile", ""), kwargs.get("project_name") or None
+        )
+        if bridge.get("allow_elevated") and not bridge.get("auth_key"):
             bridge["auth_key"] = generate_auth_key()
-            settings["chat_bridge"] = bridge
-            logger.info("Auto-generated auth key on config save")
-        except Exception:
-            pass  # Non-fatal; _get_auth_key() fallback still exists
+    settings["bots"] = bots
+    # The list is authoritative; removing its last entry must not revive the old bot.
+    settings["bot"] = {"token": ""}
+    settings["chat_bridge"] = {}
     return settings
 
 
