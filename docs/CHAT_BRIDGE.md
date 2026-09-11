@@ -1,6 +1,16 @@
 # Chat Bridge Configuration Guide
 
-Use Discord as a real-time chat frontend to Agent Zero's LLM. Users message in a designated Discord channel and receive LLM-generated responses.
+Use Discord as a real-time chat frontend to Agent Zero's LLM. Mention the bot with `@Bot your message` in an allowed server to create a chat, without registering a channel first. Later mentions in the same channel reuse that chat. Mentioning only `@Bot` starts with a greeting.
+
+The chat appears in Agent Zero's sidebar as `Discord #channel`, with saved messages and replies. New chats use the configured default preset and agent profile. Restricted mode remains chat-only; tool access still requires elevated-mode authentication.
+
+Enable **Auto-start chat bridge** to connect at startup, even with no registered channels. The background job loop also picks up this setting within a minute. Channels registered through `discord_chat` additionally receive replies to messages without a mention; mentioning a bot does not register the channel for this behavior.
+
+Run the mention regression check in the Agent Zero framework environment from `/a0`:
+
+```bash
+/opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_mentions
+```
 
 ---
 
@@ -14,9 +24,9 @@ Discord Gateway (WebSocket) ---> ChatBridgeBot (discord.py)
     |
     v
 on_message() handler checks:
-  1. Is this channel in our designated list? (skip if not)
+  1. Is the bot mentioned, or is this a designated chat channel? (skip if neither)
   2. Is the author a bot? (skip bots)
-  3. Is the author on the User Allowlist? (silently ignore if not)
+  3. Are the server and author allowed? (silently ignore if not)
   4. Is this an auth/deauth command? (handle separately)
   5. Is the message empty? (skip empty)
   6. Rate limit check (10 msgs / 60 sec per user)
@@ -27,11 +37,12 @@ Show typing indicator in Discord
     v
 Route based on session state:
   - Elevated session active -> full Agent Zero agent loop
-  - Otherwise -> restricted utility model (conversation only)
+  - Otherwise -> preset's main chat model (conversation only, no tools)
     |
     v
 Create/retrieve AgentContext for this channel
-  - Message prefixed: "[Discord - DisplayName]: message text"
+  - New chats use the bridge's default preset and agent profile
+  - Restricted messages and replies are saved to history and the WebUI log
   - Image attachments: saved to temp files and forwarded as file paths
   - Each channel has its own conversation context (independent history)
     |
@@ -52,7 +63,7 @@ The chat bridge is designed with a **defense-in-depth** approach. Multiple indep
 
 ### Privilege Isolation (Architectural)
 
-By default, the chat bridge operates in **restricted mode**: Discord messages are processed via a direct LLM call (`call_utility_model`) that has zero access to Agent Zero's tools, code execution, file system, or any other system resources. This isolation is enforced at the code level, not through prompt instructions -- even a successful prompt injection cannot escalate privileges in restricted mode.
+By default, the chat bridge operates in **restricted mode**: Discord messages are processed via a direct LLM call (`call_chat_model`) using the selected preset's main chat model, with zero access to Agent Zero's tools, code execution, file system, or any other system resources. This isolation is enforced at the code level, not through prompt instructions -- even a successful prompt injection cannot escalate privileges in restricted mode.
 
 ### User Allowlist (Access Control)
 
@@ -127,7 +138,7 @@ The **recommended setup** for elevated mode:
 
 #### What Elevated Mode Grants
 
-When a user authenticates with `!auth <key>`, their messages are routed through the **full Agent Zero agent loop** instead of the restricted utility model. This gives them access to:
+When a user authenticates with `!auth <key>`, their messages are routed through the **full Agent Zero agent loop** instead of a restricted model call. This gives them access to:
 
 - All Agent Zero tools (code execution, file read/write, web requests, etc.)
 - The host filesystem (within the Agent Zero container)
@@ -432,7 +443,7 @@ The next message in that channel will create a new conversation context.
 - Empty messages are ignored
 - Messages are prefixed with `[Discord - DisplayName]:` for LLM context
 - If the user has an active elevated session, messages route through the full agent loop
-- Otherwise, messages route through the restricted utility model (conversation only)
+- Otherwise, messages route through the preset's main chat model (conversation only, no tools)
 
 ### Image Handling
 When a user sends an image attachment in a chat bridge channel:

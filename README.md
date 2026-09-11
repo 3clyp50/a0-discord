@@ -19,7 +19,7 @@ A full-featured Discord integration plugin for Agent Zero that enables reading, 
 - **Extract insights** for deep research analysis of Discord discussions
 - **Track members** with a persistent persona registry and notes
 - **Monitor channels** for new messages with automatic image analysis
-- **Chat bridge** -- use Discord as a real-time chat frontend to Agent Zero's LLM
+- **Chat bridge** -- mention the bot with `@Bot your message` to create a saved Agent Zero chat using the configured preset and agent profile; no channel registration required
 
 ## Quick Start
 
@@ -190,7 +190,7 @@ This plugin has been security-hardened with multiple layers of defense. **Read t
 
 ### Core Protections
 
-- **Chat bridge privilege isolation** -- The chat bridge uses direct LLM calls (`call_utility_model`) instead of the full agent loop. In restricted mode (the default), Discord users have **zero access** to tools, code execution, file operations, or system resources. This is enforced architecturally, not by prompt instructions.
+- **Chat bridge privilege isolation** -- The chat bridge uses direct LLM calls (`call_chat_model`) instead of the full agent loop. In restricted mode (the default), Discord users have **zero access** to tools, code execution, file operations, or system resources. This is enforced architecturally, not by prompt instructions.
 - **Prompt injection defense** -- Input sanitization with Unicode homoglyph normalization (NFKC), zero-width character stripping, and pattern-based injection detection.
 - **Snowflake ID validation** -- All Discord IDs are validated as 17-20 digit numbers before use in API calls.
 - **SSRF protection** -- Image downloads restricted to Discord CDN hosts only.

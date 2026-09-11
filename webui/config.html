@@ -11,8 +11,8 @@
         if (!config.chat_bridge) config.chat_bridge = {};
         if (config.servers === undefined) config.servers = [];
         if (config.chat_bridge.allowed_users === undefined) config.chat_bridge.allowed_users = [];
-        if (config.chat_bridge.default_preset === undefined) config.chat_bridge.default_preset = "";
-        if (config.chat_bridge.default_agent_profile === undefined) config.chat_bridge.default_agent_profile = "";
+        if (config.chat_bridge.default_preset === undefined) config.chat_bridge.default_preset = '';
+        if (config.chat_bridge.default_agent_profile === undefined) config.chat_bridge.default_agent_profile = '';
     ">
         <template x-if="config">
             <div>
@@ -148,13 +148,13 @@
                 <!-- Chat Bridge -->
                 <div class="section-title">Chat Bridge</div>
                 <div class="section-description">
-                    Route Discord messages through Agent Zero's LLM. Requires a bot token. Channels are managed via the <code>discord_chat</code> tool.
+                    Mention the bot with @ to start a chat. To receive replies to every message in a channel, register it with the <code>discord_chat</code> tool.
                 </div>
 
                 <div class="field">
                     <div class="field-label">
-                        <div class="field-title">Auto-start on agent startup</div>
-                        <div class="field-description">Automatically connect the bot when Agent Zero starts (if channels are configured).</div>
+                        <div class="field-title">Auto-start chat bridge</div>
+                        <div class="field-description">Automatically connect the bot when Agent Zero starts. No registered channels are required. Setting changes are picked up within a minute.</div>
                     </div>
                     <div class="field-control">
                         <label class="toggle">

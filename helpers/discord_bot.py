@@ -2,7 +2,7 @@
 Listens for messages in designated channels and routes them through Agent Zero's LLM.
 
 SECURITY MODEL:
-  - Restricted mode (default): Uses call_utility_model() — NO tools, NO code execution,
+  - Restricted mode (default): Uses call_chat_model() — NO tools, NO code execution,
     NO file access. The LLM literally cannot perform system operations.
   - Elevated mode (opt-in): Authenticated users get full agent loop access via
     context.communicate(). Requires: allow_elevated=true in config + runtime auth
@@ -101,7 +101,7 @@ def set_context_id(channel_id: str, context_id: str):
 class ChatBridgeBot(discord.Client):
     """Discord bot that bridges messages to Agent Zero's LLM.
 
-    SECURITY: By default, uses direct LLM calls (call_utility_model) with NO
+    SECURITY: By default, uses direct LLM calls (call_chat_model) with NO
     tool access. Authenticated users can optionally elevate to full agent loop
     access if allow_elevated is enabled in the plugin config.
     """
@@ -193,6 +193,26 @@ class ChatBridgeBot(discord.Client):
         if context.get_data("chat_model_override") is None:
             context.set_data("chat_model_override", {"preset_name": preset})
 
+    def _get_bridge_context(self, channel_id: str, message: discord.Message):
+        from agent import AgentContext, AgentContextType
+        from initialize import initialize_agent
+        from helpers import persist_chat
+        from helpers.state_monitor_integration import mark_dirty_all
+
+        context = AgentContext.get(get_context_id(channel_id) or "")
+        if context is None:
+            context = AgentContext(
+                config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
+                type=AgentContextType.USER,
+                name=f"Discord #{getattr(message.channel, 'name', channel_id)}",
+            )
+            self._apply_bridge_context_defaults(context)
+            persist_chat.save_tmp_chat(context)
+            set_context_id(channel_id, context.id)
+            self._conversations.pop(channel_id, None)
+            mark_dirty_all(reason="discord.chat_created")
+        return context
+
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
@@ -260,7 +280,7 @@ class ChatBridgeBot(discord.Client):
 
         Returns True if the message was an auth command (consumed), False otherwise.
         """
-        text = message.content.strip()
+        text = self._strip_bot_mentions(message.content)
         user_id = str(message.author.id)
 
         # --- !deauth (accept common typos/aliases) ---
@@ -383,8 +403,8 @@ class ChatBridgeBot(discord.Client):
     # Message handling
     # ------------------------------------------------------------------
 
-    def _strip_leading_bot_mention(self, text: str) -> str:
-        """Strip a leading bot mention from user messages."""
+    def _strip_bot_mentions(self, text: str) -> str:
+        """Remove this bot's mentions while preserving the user's request."""
         bot_id = str(self.user.id) if self.user else ""
         if not bot_id:
             return text.strip()
@@ -393,10 +413,7 @@ class ChatBridgeBot(discord.Client):
         direct = f"<@{bot_id}>"
         nickname = f"<@!{bot_id}>"
 
-        for mention in (direct, nickname):
-            if normalized.startswith(mention):
-                return normalized[len(mention):].lstrip()
-        return normalized
+        return normalized.replace(direct, "").replace(nickname, "").strip()
 
     async def on_message(self, message: discord.Message):
         # Ignore own messages and other bots
@@ -405,18 +422,27 @@ class ChatBridgeBot(discord.Client):
 
         channel_id = str(message.channel.id)
         chat_channels = get_chat_channels()
+        user_text = self._strip_bot_mentions(message.content)
+        mentioned = user_text != message.content.strip()
 
-        # Only respond in designated chat channels
-        if channel_id not in chat_channels:
+        # Mentions work without registering a channel for every-message replies.
+        if channel_id not in chat_channels and not mentioned:
             return
 
-        # User allowlist: silently ignore users not on the list
+        # Mentions never bypass server or user restrictions.
         config = self._get_config()
+        allowed_servers = config.get("servers", [])
+        if allowed_servers and (
+            message.guild is None
+            or str(message.guild.id) not in [str(g) for g in allowed_servers]
+        ):
+            return
         allowed_users = config.get("chat_bridge", {}).get("allowed_users", [])
         if allowed_users and str(message.author.id) not in [str(u) for u in allowed_users]:
             return
 
-        user_text = self._strip_leading_bot_mention(message.content)
+        if mentioned and not user_text:
+            user_text = "Hello!"
         if not user_text.strip():
             return
 
@@ -480,31 +506,15 @@ class ChatBridgeBot(discord.Client):
         """Get LLM response via direct model call (no agent loop, no tools).
 
         SECURITY: This intentionally bypasses the full agent loop. The LLM is
-        called directly via call_utility_model(), which provides NO tool access.
+        called directly via call_chat_model(), which provides NO tool access.
         This prevents privilege escalation from untrusted Discord users.
         """
         try:
-            from agent import AgentContext, AgentContextType
-            from initialize import initialize_agent
+            from agent import UserMessage
+            from helpers import persist_chat, message_queue
+            from langchain_core.messages import HumanMessage, SystemMessage
 
-            # Get or create a context (only for model access, NOT for tool execution)
-            context_id = get_context_id(channel_id)
-            context = None
-
-            if context_id:
-                context = AgentContext.get(context_id)
-
-            if context is None:
-                context = AgentContext(
-                    config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
-                    type=AgentContextType.USER,
-                )
-                self._apply_bridge_context_defaults(context)
-                set_context_id(channel_id, context.id)
-                logger.info(f"Created new context {context.id} for channel {channel_id}")
-            else:
-                self._apply_bridge_context_defaults(context)
-
+            context = self._get_bridge_context(channel_id, message)
             agent = context.agent0
 
             # Sanitize external content
@@ -513,6 +523,10 @@ class ChatBridgeBot(discord.Client):
                 message.author.display_name or message.author.name
             )
             safe_text = sanitize_content(text)
+            visible_text = f"{author_name}: {safe_text}"
+            agent.hist_add_user_message(UserMessage(message=visible_text))
+            message_queue.log_user_message(context, visible_text, [], source=" (Discord)")
+            persist_chat.save_tmp_chat(context)
 
             # Maintain per-channel conversation history
             if channel_id not in self._conversations:
@@ -535,10 +549,17 @@ class ChatBridgeBot(discord.Client):
             conversation_text = "\n".join(formatted)
 
             # Direct LLM call — NO tools, NO agent loop, NO code execution
-            response = await agent.call_utility_model(
-                system=self.CHAT_SYSTEM_PROMPT,
-                message=conversation_text,
+            response, _ = await agent.call_chat_model(
+                messages=[
+                    SystemMessage(content=self.CHAT_SYSTEM_PROMPT),
+                    HumanMessage(content=conversation_text),
+                ],
+                response_callback=None,
             )
+            response = str(response)
+            agent.hist_add_ai_response(response)
+            context.log.log(type="response", content=response, finished=True)
+            persist_chat.save_tmp_chat(context)
 
             # Store response in history
             history.append({"role": "assistant", "content": response})
@@ -546,10 +567,9 @@ class ChatBridgeBot(discord.Client):
             return response if isinstance(response, str) else str(response)
 
         except ImportError:
-            # Fallback: use HTTP API if in-process imports aren't available
-            # WARNING: HTTP fallback routes through the full agent loop and is
-            # less secure. It should only be used when A0 imports are unavailable.
-            return await self._get_agent_response_http(channel_id, text)
+            # Restricted messages must never fall back to the full agent loop.
+            logger.exception("Restricted Discord chat dependencies are unavailable")
+            return "The chat model is unavailable. Check the Agent Zero logs."
 
     # ------------------------------------------------------------------
     # Elevated mode: full agent loop with tools (authenticated users only)
@@ -562,26 +582,10 @@ class ChatBridgeBot(discord.Client):
         The caller (_on_message) verifies elevation status before calling this.
         """
         try:
-            from agent import AgentContext, AgentContextType, UserMessage
-            from initialize import initialize_agent
+            from agent import UserMessage
+            from helpers import message_queue
 
-            # Get or create a context for this channel
-            context_id = get_context_id(channel_id)
-            context = None
-
-            if context_id:
-                context = AgentContext.get(context_id)
-
-            if context is None:
-                context = AgentContext(
-                    config=initialize_agent(override_settings=self._get_bridge_init_overrides()),
-                    type=AgentContextType.USER,
-                )
-                self._apply_bridge_context_defaults(context)
-                set_context_id(channel_id, context.id)
-                logger.info(f"Created new elevated context {context.id} for channel {channel_id}")
-            else:
-                self._apply_bridge_context_defaults(context)
+            context = self._get_bridge_context(channel_id, message)
 
             # Sanitize input (injection defense still applies)
             from usr.plugins.discord.helpers.sanitize import sanitize_content, sanitize_username
@@ -612,6 +616,9 @@ class ChatBridgeBot(discord.Client):
                         pass
 
             user_msg = UserMessage(message=prefixed_text, attachments=attachment_paths)
+            message_queue.log_user_message(
+                context, prefixed_text, attachment_paths, source=" (Discord)"
+            )
             task = context.communicate(user_msg)
             result = await task.result()
 
