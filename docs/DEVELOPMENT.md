@@ -147,6 +147,12 @@ and modal lifecycle coverage.
 
 ---
 
+## Thumbnail
+
+Keep `thumbnail.png` (catalog) and `webui/thumbnail.png` (installed plugin list)
+identical: 256x256 PNG, below 20 KB, with an opaque background and enough inset
+to show the entire logo in the rounded thumbnail tile.
+
 ## Tool prompt maintenance
 
 Public tool prompts live in `prompts/agent.system.tool.discord_read.md` and
