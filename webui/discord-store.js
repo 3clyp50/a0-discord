@@ -22,7 +22,6 @@ export const store = createStore("discordConfig", {
         { action: "start", label: "Start bot", icon: "play_arrow" },
         { action: "stop", label: "Stop bot", icon: "stop" },
         { action: "restart", label: "Restart bot", icon: "refresh" },
-        { action: "test", label: "Test connection", icon: "network_check" },
     ],
 
     get scoped() {
@@ -88,13 +87,12 @@ export const store = createStore("discordConfig", {
         const generation = this.generation;
         this.busyBot = bot.id;
         try {
-            const data = await callJsonApi(endpoint + (action === "test" ? "discord_test" : "discord_bridge_api"), {
+            const data = await callJsonApi(endpoint + "discord_bridge_api", {
                 action, bot_id: bot.id,
             });
             if (generation !== this.generation) return;
             if (!data.ok) throw new Error(data.error);
-            if (action === "test") notify("success", "Connected as " + data.user + ".");
-            else this.bots = this.bots.map(item => item.id === bot.id ? { ...item, ...data } : item);
+            this.bots = this.bots.map(item => item.id === bot.id ? { ...item, ...data } : item);
         } catch (error) {
             if (generation === this.generation) notify("error", error.message || "Discord action failed.");
         } finally {

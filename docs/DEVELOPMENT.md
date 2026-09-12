@@ -137,7 +137,7 @@ CSS classes provided by the framework: `field`, `field-label`, `field-title`, `f
 `config.html` is the only plugin page. `discord-store.js` uses `createStore`,
 `callJsonApi` and Agent Zero notifications for per-bot icon controls and status.
 Keep runtime status separate from editable bot settings. Actions send only the
-stable saved `bot_id`; new or changed drafts cannot start, restart or test a bot.
+stable saved `bot_id`; new or changed drafts cannot start or restart a bot.
 Stop may pause an already running bot even with pending edits. Global bridge
 controls are disabled in project/profile scopes. Clean up the status timer and
 ignore pending responses when the modal closes or reloads.
@@ -301,7 +301,7 @@ bash tests/regression_test.sh a0-testing 50085
 ### Integration Testing
 
 1. Install the plugin into a running Agent Zero instance
-2. Open the WebUI and test a saved bot using its Config row's Test connection icon
+2. Open the WebUI and check a saved bot's status and Start, Stop and Restart controls in Config
 3. Ask the agent to list channels, read messages, etc.
 4. Check Agent Zero logs for errors
 

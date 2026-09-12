@@ -47,7 +47,7 @@ For each Discord bot:
 2. Enable Message Content Intent; enable Server Members Intent if member-list operations are needed.
 3. Invite the bot with View Channels, Read Message History and Send Messages. Add Add Reactions for reactions and Manage Messages for deleting authentication commands.
 4. Open plugin **Config**, add an entry, and enter its token. Choose a label, preset, agent profile, server/user allowlists and auto-start behavior.
-5. Save, then reopen **Config**. Each bot row has Start, Stop, Restart and Test connection icons, live status and tooltips. New or edited bots must be saved before starting, restarting or testing; Stop remains available for running bots.
+5. Save, then reopen **Config**. Each bot row has Start, Stop and Restart icons, live status and tooltips. New or edited bots must be saved before starting or restarting; Stop remains available for running bots.
 
 Names are local labels; renaming an entry does not change its stable ID or saved chats. The plugin connects applications, not creates Discord applications. Gateway bot configuration belongs in global plugin settings; profile/project-scoped settings affect agent tools, not extra gateway instances.
 

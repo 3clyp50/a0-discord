@@ -6,7 +6,6 @@ import test from "node:test";
 
 test("bot controls use saved IDs, preserve drafts, reject scoped actions and stop on cleanup", async () => {
     const calls = [];
-    const notices = [];
     const timers = new Set();
     let pendingStatus;
     const runtime = [
@@ -16,14 +15,13 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
     const sandbox = {
         crypto: { randomUUID },
         createStore: (_name, value) => value,
-        notifications: { createNotification: (...args) => notices.push(args) },
+        notifications: { createNotification: () => {} },
         setInterval: fn => { timers.add(fn); return fn; },
         clearInterval: fn => timers.delete(fn),
         callJsonApi: async (url, input) => {
             calls.push({ url, ...input });
             if (url === "agents") return { data: [] };
             if (input.action === "status") return pendingStatus || { ok: true, bots: runtime };
-            if (input.action === "test") return { ok: true, user: "Example" };
             return { ok: true, running: input.action !== "stop", status: input.action === "stop" ? "stopped" : "connecting" };
         },
     };
@@ -46,12 +44,10 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
     await store.action(first, "stop");
     await store.action(second, "start");
     await store.action(second, "restart");
-    await store.action(second, "test");
     assert.equal(JSON.stringify(config), before);
-    assert.deepEqual(calls.filter(c => ["start", "stop", "restart", "test"].includes(c.action)).map(c => [c.action, c.bot_id]),
-        [["stop", "first"], ["start", "second"], ["restart", "second"], ["test", "second"]]);
+    assert.deepEqual(calls.filter(c => ["start", "stop", "restart"].includes(c.action)).map(c => [c.action, c.bot_id]),
+        [["stop", "first"], ["start", "second"], ["restart", "second"]]);
     assert.equal(JSON.stringify(calls).includes("secret-"), false);
-    assert.equal(notices.at(-1)[0], "success");
 
     second.token = "unsaved-token";
     context.addDiscordBot();
