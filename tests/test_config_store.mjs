@@ -39,10 +39,14 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
     const [first, second] = config.bots;
     assert.equal(timers.size, 1);
     assert.equal(store.statusLabel(first), "Connected");
+    assert.deepEqual(Array.from(store.controlsFor(first), control => control.action), ["stop", "restart"]);
+    assert.deepEqual(Array.from(store.controlsFor(second), control => control.action), ["start", "restart"]);
 
     const before = JSON.stringify(config);
     await store.action(first, "stop");
+    assert.equal(store.controlsFor(first)[0].icon, "play_arrow");
     await store.action(second, "start");
+    assert.equal(store.controlsFor(second)[0].icon, "stop");
     await store.action(second, "restart");
     assert.equal(JSON.stringify(config), before);
     assert.deepEqual(calls.filter(c => ["start", "stop", "restart"].includes(c.action)).map(c => [c.action, c.bot_id]),

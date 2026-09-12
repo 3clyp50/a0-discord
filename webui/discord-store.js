@@ -32,6 +32,11 @@ export const store = createStore("discordConfig", {
         return this.bots.find(item => item.id === bot.id);
     },
 
+    controlsFor(bot) {
+        return this.controls.filter(control =>
+            control.action !== (this.runtime(bot)?.running ? "start" : "stop"));
+    },
+
     changed(bot) {
         return JSON.stringify(bot) !== this.savedDrafts[bot.id];
     },

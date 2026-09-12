@@ -30,7 +30,7 @@
                             </button>
                             <div class="discord-bot-actions">
                                 <span class="discord-bot-status" role="status" x-text="$store.discordConfig.statusLabel(bot)"></span>
-                                <template x-for="control in $store.discordConfig.controls" :key="control.action">
+                                <template x-for="control in $store.discordConfig.controlsFor(bot)" :key="control.action === 'restart' ? 'restart' : 'toggle'">
                                     <button type="button" class="btn btn-action"
                                         :title="control.label + ($store.discordConfig.disabledReason(bot, control.action) ? ': ' + $store.discordConfig.disabledReason(bot, control.action) : '')"
                                         :aria-label="control.label + ' - ' + (bot.name || 'New bot')"
