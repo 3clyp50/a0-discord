@@ -172,6 +172,15 @@ tool extractor and compare native tool names/schemas. Run the offline
 
 ## Adding a New Tool
 
+For read-only bridge search, extend `helpers/bridge_reader.py` and its separate
+bridge prompt instead of adding a baseline tool. `_search_server` owns bounded
+four-way channel sweeps and stateless continuations; `_search` owns filters and
+message cursors. Never bypass `_visible` for a cached message or resumed target.
+`discord_bot.py` owns the 24-read budget, requester-scoped evidence/checkpoints
+and one optional progress message. Keep server coverage separate from threads.
+Run `python -m usr.plugins.discord.tests.test_server_search` in the framework
+runtime for offline sweep, filter, continuation and cache checks.
+
 ### Step 1: Create the tool file
 
 Create `tools/discord_search.py`:

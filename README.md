@@ -59,7 +59,7 @@ Legacy single-bot configuration migrates on Config Save. An explicit empty `bots
 
 Mention a bot or reply to its message to create or continue a saved chat. Register a channel only for replies to every message. Bots in the same channel have independent chats, authentication sessions and rate limits.
 
-The read-only bridge has its own dedicated `discord_read` interface, not the two general Agent Zero tools. It includes recent channel context, real runtime model/profile metadata, and permission-scoped server/thread reading. It supports keyword/author/date search that scans inside the plugin and returns compact matches, plus exact-message retrieval. Its eight-read budget is unchanged.
+The read-only bridge has its own dedicated `discord_read` interface, not the two general Agent Zero tools. It includes recent channel context, real runtime model/profile metadata, and permission-scoped server/thread reading. Server-wide search runs bounded concurrent channel pages inside the plugin, with compact coverage and resumable cursors. Keyword alternatives, quoted phrases and GitHub PR-link filters help find related discussion across authors. Exact evidence is briefly cached with permission checks. The budget remains 24 remote reads per response.
 
 See [Chat Bridge Guide](docs/CHAT_BRIDGE.md) for dates, coverage, authentication and limits. The focused `search` action belongs to the bridge reader; do not invent that action for the normal Agent Zero `discord_read` tool.
 
