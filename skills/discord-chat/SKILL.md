@@ -7,7 +7,7 @@ allowed-tools: [discord_read, discord_send]
 
 # Discord administration
 
-Prefer the plugin Open dashboard for Start, Stop, Restart and status; Config owns bot tokens, presets, profiles and access rules. Never put credentials into tool arguments or Discord messages.
+Prefer the plugin Config page for each bot's Start, Stop, Restart and status controls, tokens, presets, profiles and access rules. Save bot changes before using the controls. Never put credentials into tool arguments or Discord messages.
 
 Mentions and replies work without registering channels. Register a channel only when the operator wants replies to every message there.
 

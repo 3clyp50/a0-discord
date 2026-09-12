@@ -165,7 +165,7 @@ https://discord.com/channels/SERVER_ID/CHANNEL_ID
 3. Confirm "Discord Integration" appears in the plugin list
 4. Click the plugin
 5. Enter your bot token and click the outer **Save** button
-6. Click **"Open"** to view the dashboard
+6. Use **Config** to manage bots. Save changes, then use each bot row's Start, Stop, Restart and Test connection icons.
 7. Click **"Test Connection"**
 8. Expected: green "Connected" badge showing your bot's username
 

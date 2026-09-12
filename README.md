@@ -47,7 +47,7 @@ For each Discord bot:
 2. Enable Message Content Intent; enable Server Members Intent if member-list operations are needed.
 3. Invite the bot with View Channels, Read Message History and Send Messages. Add Add Reactions for reactions and Manage Messages for deleting authentication commands.
 4. Open plugin **Config**, add an entry, and enter its token. Choose a label, preset, agent profile, server/user allowlists and auto-start behavior.
-5. Save. Use the plugin **Open** page to start, stop, restart or test individual bots.
+5. Save, then reopen **Config**. Each bot row has Start, Stop, Restart and Test connection icons, live status and tooltips. New or edited bots must be saved before starting, restarting or testing; Stop remains available for running bots.
 
 Names are local labels; renaming an entry does not change its stable ID or saved chats. The plugin connects applications, not creates Discord applications. Gateway bot configuration belongs in global plugin settings; profile/project-scoped settings affect agent tools, not extra gateway instances.
 
@@ -79,7 +79,7 @@ Use live member operations through `discord_read` (`members` / `member`). Load t
 
 New monitoring tasks load `discord-alerts` and invoke the documented workflow. Existing custom or scheduled prompts that directly call the old tool names must be updated; the plugin does not silently rewrite operator-authored tasks. Existing state and saved chats are retained.
 
-The dashboard uses Agent Zero's typography, colors, spacing and border tokens. No new frontend dependencies are required.
+Config is the only plugin page. Bot rows use Agent Zero's fields, icon buttons, shared Advanced accordions and notifications. Status refreshes while the modal is open and stops when it closes. Scoped settings cannot operate global bridge controls.
 
 ## Runnable checks
 

@@ -468,11 +468,11 @@ fi
 section "9. WebUI Files"
 # ============================================================
 
-# T9.1: Dashboard
-if docker exec "$CONTAINER" test -f /a0/usr/plugins/discord/webui/main.html; then
-    pass "T9.1 WebUI dashboard (main.html) exists"
+# T9.1: Configuration is the sole plugin page
+if docker exec "$CONTAINER" test ! -f /a0/usr/plugins/discord/webui/main.html; then
+    pass "T9.1 Redundant Open dashboard is absent"
 else
-    fail "T9.1 WebUI dashboard" "main.html not found"
+    fail "T9.1 Redundant Open dashboard" "main.html still exists"
 fi
 
 # T9.2: Config page
@@ -483,7 +483,7 @@ else
 fi
 
 # T9.3: Config page has elevated mode warning
-HAS_WARNING=$(docker exec "$CONTAINER" grep -c "elevated-warning" /a0/usr/plugins/discord/webui/config.html 2>/dev/null)
+HAS_WARNING=$(docker exec "$CONTAINER" grep -c "Elevated mode grants Discord users" /a0/usr/plugins/discord/webui/config.html 2>/dev/null)
 if [ "$HAS_WARNING" -gt 0 ]; then
     pass "T9.3 Config page includes elevated mode security warning"
 else

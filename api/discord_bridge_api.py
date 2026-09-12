@@ -1,4 +1,4 @@
-"""Authenticated, per-bot bridge controls and secret-free dashboard status."""
+"""Authenticated, per-bot bridge controls and secret-free configuration status."""
 import logging
 from helpers.api import ApiHandler, Request, Response
 

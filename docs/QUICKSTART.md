@@ -38,7 +38,7 @@ docker exec a0-container bash /tmp/discord-plugin/install.sh
 2. Go to Settings > External Services > Discord Integration
 3. Paste your bot token in the **Bot Token** field
 4. Click the **Save** button (outer framework Save)
-5. Click **"Open"** to view the dashboard
+5. Save, then reopen **Config** to start or test a bot using its row's icon controls.
 6. Click **"Test Connection"** — should show green "Connected as @botname"
 
 ### Credential Mapping

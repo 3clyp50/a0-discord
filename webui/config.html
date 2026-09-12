@@ -6,15 +6,50 @@
     </script>
 </head>
 <body>
-    <div x-data x-init="$store.discordDashboard.initConfig(config, context)">
+    <div x-data x-init="$store.discordConfig.initConfig(config, context)" x-destroy="$store.discordConfig.cleanup()">
         <template x-if="config &amp;&amp; Array.isArray(config.bots)">
             <div class="discord-config">
-                <div class="section-title">Discord bots</div>
-                <div class="section-description">Add one entry per Discord application. Each bot has its own token, access rules, model preset, agent profile and conversations. Names are local labels, not Discord renames. Save settings to apply changes.</div>
+                <div class="discord-config-heading">
+                    <div class="section-title">Discord</div>
+                    <button type="button" class="btn btn-action" title="Refresh bot status" aria-label="Refresh bot status"
+                        @click="$store.discordConfig.refresh()" :disabled="$store.discordConfig.busy || !!$store.discordConfig.busyBot || $store.discordConfig.scoped">
+                        <x-icon name="refresh"></x-icon>
+                    </button>
+                </div>
+                <div class="section-description">Connect one entry per Discord bot. Each has its own access rules, model preset, agent profile and conversations. Save settings to apply changes.</div>
+                <div class="field-description" x-show="$store.discordConfig.scoped">Live bots are managed under Global / All profiles. These scoped settings apply to agent tools.</div>
                 <template x-for="(bot, index) in config.bots" :key="bot.id">
-                    <details class="discord-config-bot" :open="config.bots.length === 1 || !bot.token">
-                        <summary><span x-text="bot.name || 'New bot'"></span><span class="discord-config-id" x-text="bot.enabled ? 'Enabled' : 'Disabled'"></span></summary>
-                        <div class="discord-config-body">
+                    <section class="discord-config-bot" x-data="{ expanded: config.bots.length === 1 || !bot.token }">
+                        <div class="discord-bot-header">
+                            <button type="button" class="discord-bot-toggle" :aria-expanded="expanded" @click="expanded = !expanded">
+                                <span class="discord-bot-heading">
+                                    <strong x-text="bot.name || 'New bot'"></strong>
+                                    <span class="field-description" x-text="(bot.chat_bridge.default_agent_profile || 'Default profile') + ' / ' + (bot.chat_bridge.auto_start ? 'Auto-start' : 'Manual start')"></span>
+                                </span>
+                                <x-icon :name="expanded ? 'expand_less' : 'expand_more'"></x-icon>
+                            </button>
+                            <div class="discord-bot-actions">
+                                <span class="discord-bot-status" role="status" x-text="$store.discordConfig.statusLabel(bot)"></span>
+                                <template x-for="control in $store.discordConfig.controls" :key="control.action">
+                                    <button type="button" class="btn btn-action"
+                                        :title="control.label + ($store.discordConfig.disabledReason(bot, control.action) ? ': ' + $store.discordConfig.disabledReason(bot, control.action) : '')"
+                                        :aria-label="control.label + ' - ' + (bot.name || 'New bot')"
+                                        :disabled="!!$store.discordConfig.disabledReason(bot, control.action)"
+                                        @click="$store.discordConfig.action(bot, control.action)">
+                                        <x-icon :name="control.icon"></x-icon>
+                                    </button>
+                                </template>
+                                <button type="button" class="btn btn-action delete" title="Remove bot after saving"
+                                    :aria-label="'Remove bot - ' + (bot.name || 'New bot')"
+                                    :disabled="!!$store.discordConfig.busyBot"
+                                    @click="$confirmClick($event, () => config.bots.splice(index, 1))">
+                                    <x-icon name="delete"></x-icon>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="discord-config-body" x-show="expanded">
+                            <div class="field-description" x-show="$store.discordConfig.runtime(bot)?.user"
+                                x-text="($store.discordConfig.runtime(bot)?.user || '') + ' / Servers joined: ' + ($store.discordConfig.runtime(bot)?.guilds || 0)"></div>
                             <div class="field">
                                 <div class="field-label"><div class="field-title">Bot name</div><div class="field-description">Rename this label without losing existing chats.</div></div>
                                 <div class="field-control"><input type="text" x-model="bot.name" aria-label="Bot name" placeholder="A0 Bug-Sweeper" /></div>
@@ -67,7 +102,7 @@
                 <div class="field">
                     <div class="field-label">
                         <div class="field-title">Auto-start chat bridge</div>
-                        <div class="field-description">Automatically connect the bot when Agent Zero starts. No registered channels are required. Saved settings are picked up within a minute. Stop on the Open page pauses this bot until manually started or Agent Zero restarts.</div>
+                        <div class="field-description">Automatically connect the bot when Agent Zero starts. No registered channels are required. Saved settings are picked up within a minute. Stop pauses this bot until manually started or Agent Zero restarts.</div>
                     </div>
                     <div class="field-control">
                         <label class="toggle">
@@ -118,6 +153,12 @@
                     </div>
                 </div>
 
+<div class="settings-advanced-section" x-data="{ advOpen: false }">
+                    <button type="button" class="settings-advanced-toggle" :aria-expanded="advOpen" @click="advOpen = !advOpen">
+                        <x-icon class="settings-advanced-toggle-icon" :style="advOpen ? 'transform:rotate(90deg)' : ''" name="chevron_right"></x-icon>
+                        <span>Advanced</span>
+                    </button>
+                    <div class="settings-advanced-body" x-show="advOpen" x-transition.opacity style="display: none;">
                 <!-- Elevated mode -->
                 <div class="section-title">Elevated Mode (2FA)</div>
                 <div class="section-description">
@@ -140,9 +181,9 @@
 
                 <template x-if="bot.chat_bridge.allow_elevated">
                     <div>
-                        <div style="background: var(--bg-warning, #fce4ec); border: 1px solid var(--border-warning, #ef9a9a); border-radius: 6px; padding: 10px; margin-bottom: 12px;">
-                            <div style="font-size: 12px; font-weight: 700; color: var(--text-error, #c62828); margin-bottom: 4px;">Security Notice</div>
-                            <div style="font-size: 11px; color: var(--text-error, #b71c1c); line-height: 1.5;">
+                        <div class="field-description">
+                            <div>Security Notice</div>
+                            <div>
                                 Elevated mode grants Discord users <strong>full access</strong> to Agent Zero's capabilities, including code execution, file operations, and system tools.
                                 Before enabling, read the security section in the plugin's <strong>README.md</strong>.
                                 <br><br>
@@ -155,11 +196,10 @@
                                 <div class="field-title">Auth Key</div>
                                 <div class="field-description">Users send <code>!auth &lt;key&gt;</code> in Discord to elevate. The message is auto-deleted. Share this key securely.</div>
                             </div>
-                            <div class="field-control" style="display: flex; gap: 6px; align-items: center;">
-                                <input type="text" x-model="bot.chat_bridge.auth_key" readonly
-                                    style="font-family: monospace; flex: 1;" />
-                                <button type="button" class="btn btn-field" @click="context.generateDiscordKey(bot)">Generate</button>
-                                <button type="button" class="btn btn-field" @click="context.copyDiscordKey(bot)">Copy</button>
+                            <div class="field-control discord-key-control">
+                                <input type="password" x-model="bot.chat_bridge.auth_key" aria-label="Auth key" readonly />
+                                <button type="button" class="btn btn-action" title="Generate auth key" aria-label="Generate auth key" @click="context.generateDiscordKey(bot)"><x-icon name="key"></x-icon></button>
+                                <button type="button" class="btn btn-action" title="Copy auth key" aria-label="Copy auth key" :disabled="!bot.chat_bridge.auth_key" @click="context.copyDiscordKey(bot)"><x-icon name="content_copy"></x-icon></button>
                             </div>
                         </div>
 
@@ -183,23 +223,34 @@
                         </div>
 
                         <div x-show="bot.chat_bridge.session_timeout == 0"
-                            style="background: var(--bg-warning, #fff3e0); border: 1px solid var(--border-warning, #ffcc80); border-radius: 6px; padding: 8px; font-size: 11px; color: var(--text-warning, #e65100);">
+                            class="field-description">
                             <strong>Security warning:</strong> "Never expire" means an elevated session stays active until the bot restarts or the user runs <code>!deauth</code>. If the auth key is compromised, the attacker retains full agent access indefinitely. Use with caution.
                         </div>
                     </div>
                 </template>
 
-                            <button type="button" class="btn btn-field" @click="$confirmClick($event, () => config.bots.splice(index, 1))">Remove bot</button>
+
                             <p class="field-description">Bot ID: <code x-text="bot.id"></code>. Removing a bot disconnects it after Save; saved chats are retained.</p>
+                    </div>
+                </div>
                         </div>
-                    </details>
+                    </section>
                 </template>
-                <button type="button" class="btn btn-field" @click="context.addDiscordBot()">Add bot</button>
+                <div class="discord-add-bot">
+                    <button type="button" class="btn btn-field" @click="context.addDiscordBot()" x-text="config.bots.length ? 'Connect another bot' : 'Connect bot'"></button>
+                    <div class="field-description">Save settings before starting or testing a new bot.</div>
+                </div>
+<div class="settings-advanced-section" x-data="{ advOpen: false }">
+                    <button type="button" class="settings-advanced-toggle" :aria-expanded="advOpen" @click="advOpen = !advOpen">
+                        <x-icon class="settings-advanced-toggle-icon" :style="advOpen ? 'transform:rotate(90deg)' : ''" name="chevron_right"></x-icon>
+                        <span>Advanced integration settings</span>
+                    </button>
+                    <div class="settings-advanced-body" x-show="advOpen" x-transition.opacity style="display: none;">
                 <!-- User Account (Read-Only) -->
                 <div class="section-title">User Account (Read-Only)</div>
 
-                <div style="background: var(--bg-warning, #fff3e0); border: 1px solid var(--border-warning, #ffcc80); border-radius: 6px; padding: 10px; margin-bottom: 12px;">
-                    <div style="font-size: 11px; color: var(--text-warning, #e65100); line-height: 1.5;">
+                <div class="field-description">
+                    <div>
                         User tokens are gated to read-only operations. Using a user token may violate Discord's Terms of Service. Use at your own risk.
                     </div>
                 </div>
@@ -288,19 +339,39 @@
                         </label>
                     </div>
                 </div>
-
-
+                    </div>
+                </div>
             </div>
         </template>
     </div>
     <style>
-        .discord-config-bot { margin: var(--spacing-md) 0; border: 1px solid var(--color-border); border-radius: var(--border-radius-sm); }
-        .discord-config-bot > summary { cursor: pointer; padding: var(--spacing-md); overflow-wrap: anywhere; }
-        .discord-config-bot > summary:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
-        .discord-config-id { margin-left: var(--spacing-sm); color: var(--color-text-muted); font-size: .85em; }
-        .discord-config-body { padding: 0 var(--spacing-md) var(--spacing-md); }
-        .discord-config-body code { overflow-wrap: anywhere; }
-        @media (max-width: 540px) { .discord-config-body { padding: 0 var(--spacing-sm) var(--spacing-sm); } }
+        .discord-config { display: flex; flex-direction: column; gap: var(--spacing-md); }
+        .discord-config-heading { display: flex; align-items: center; gap: var(--spacing-md); }
+        .discord-config-heading .section-title { flex: 1; }
+        .discord-bot-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-sm) var(--spacing-md); padding: var(--spacing-sm) 0; border-bottom: 1px solid var(--color-border); }
+        .discord-bot-toggle { display: flex; align-items: center; gap: var(--spacing-sm); flex: 1 1 12rem; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }
+        .discord-bot-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 4px; }
+        .discord-bot-heading { display: flex; flex-direction: column; gap: var(--spacing-xs); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+        .discord-bot-heading .field-description { margin: 0; }
+        .discord-bot-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-xs); }
+        .discord-bot-status { font-size: var(--font-size-small); color: var(--color-text-secondary); margin-right: var(--spacing-sm); }
+        .discord-config-body { padding: var(--spacing-sm) 0; }
+        .discord-config .section-title { margin-top: var(--spacing-md); }
+        .discord-config .section-description { margin-bottom: var(--spacing-md); }
+        .discord-config-heading .section-title { margin-top: 0; }
+        .discord-config .field-control { min-width: 0; }
+        .discord-config code { overflow-wrap: anywhere; }
+        .discord-key-control { gap: var(--spacing-xs); }
+        .discord-key-control input { flex: 1; min-width: 0; width: 0; }
+        .discord-config .btn-action { flex-shrink: 0; }
+        .discord-add-bot { padding-top: var(--spacing-sm); }
+        .discord-add-bot .field-description { margin-top: var(--spacing-sm); }
+        @media (max-width: 640px) {
+            .discord-bot-toggle { flex-basis: 100%; }
+            .discord-bot-actions { width: 100%; }
+            .discord-bot-status { margin-right: auto; }
+            .discord-config .field { grid-template-columns: 1fr; gap: var(--spacing-xs); }
+        }
     </style>
 </body>
 </html>

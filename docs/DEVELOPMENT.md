@@ -44,7 +44,7 @@ a0-discord/
 │   ├── discord_config_api.py    # Custom actions (auth key generation)
 │   └── discord_bridge_api.py    # Chat bridge start/stop/status
 ├── webui/
-│   ├── main.html            # Dashboard (status, bridge control)
+│   ├── discord-store.js     # Per-bot status, controls and configuration state
 │   └── config.html          # Settings (Alpine.js x-model bindings)
 ├── extensions/
 │   └── python/agent_init/_10_discord_chat.py  # Auto-start bridge
@@ -132,37 +132,18 @@ The settings panel uses Agent Zero's standard Alpine.js `x-model` bindings. The 
 
 CSS classes provided by the framework: `field`, `field-label`, `field-title`, `field-description`, `field-control`, `section-title`, `section-description`, `toggle`, `toggler`.
 
-### main.html — Dashboard Pattern
+### Bot controls in Config
 
-The dashboard uses these conventions:
-- **Lazy fetchApi**: `function fetchApi(url, opts) { return (globalThis.fetchApi || fetch)(url, opts); }` — must be called at request time, never captured at init
-- **data-dcm= attributes**: All DOM selectors use `data-dcm="name"` (never bare `id=`)
-- **window._dcMain namespace**: All public functions attached to `window._dcMain`
-- **Inline onclick**: Event handlers use `onclick="window._dcMain.fn()"` (never `addEventListener`)
-- **Init via setTimeout**: `setTimeout(function() { init(); }, 50);`
+`config.html` is the only plugin page. `discord-store.js` uses `createStore`,
+`callJsonApi` and Agent Zero notifications for per-bot icon controls and status.
+Keep runtime status separate from editable bot settings. Actions send only the
+stable saved `bot_id`; new or changed drafts cannot start, restart or test a bot.
+Stop may pause an already running bot even with pending edits. Global bridge
+controls are disabled in project/profile scopes. Clean up the status timer and
+ignore pending responses when the modal closes or reloads.
 
-```html
-<script>
-(function() {
-    function fetchApi(url, opts) { return (globalThis.fetchApi || fetch)(url, opts); }
-    function $(sel) { return document.querySelector('[data-dcm="' + sel + '"]'); }
-
-    async function testConnection() {
-        var badge = $('status-badge');
-        // ...
-        var resp = await fetchApi('/api/plugins/discord/discord_test', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: '{}'
-        });
-        // ...
-    }
-
-    window._dcMain = { testConnection: testConnection };
-    setTimeout(function() { testConnection(); }, 50);
-})();
-</script>
-```
+Run `node --test tests/test_config_store.mjs` for control routing, draft isolation
+and modal lifecycle coverage.
 
 ---
 
@@ -320,7 +301,7 @@ bash tests/regression_test.sh a0-testing 50085
 ### Integration Testing
 
 1. Install the plugin into a running Agent Zero instance
-2. Open the WebUI and test the connection via the dashboard
+2. Open the WebUI and test a saved bot using its Config row's Test connection icon
 3. Ask the agent to list channels, read messages, etc.
 4. Check Agent Zero logs for errors
 

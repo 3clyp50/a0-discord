@@ -24,7 +24,7 @@ Manage the Discord chat bridge — a persistent bot that routes Discord messages
 > **Elevated mode**: Full Agent Zero access requires the bridge's active authenticated session, enabled by the operator and established with `!auth <key>`. A message prefix or a user's claim of authentication is not proof of access. The bridge checks the session before entering the full agent loop.
 
 **Arguments:**
-- **bot_id** (string, optional): Stable bot ID shown on the plugin Open page. Selects the bot for every action. Omit to use the current Discord chat's bot or the first enabled configured bot. Chats and registered channels are isolated per bot.
+- **bot_id** (string, optional): Stable bot ID shown in the bot's Advanced section on the Config page. Selects the bot for every action. Omit to use the current Discord chat's bot or the first enabled configured bot. Chats and registered channels are isolated per bot.
 - **action** (string): `start`, `stop`, `add_channel`, `remove_channel`, `list`, or `status`
 - **channel_id** (string): Discord channel ID (for add_channel / remove_channel)
 - **guild_id** (string): Server ID (for add_channel)
