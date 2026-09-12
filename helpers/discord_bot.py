@@ -12,6 +12,7 @@ SECURITY MODEL:
 import asyncio
 import collections
 import hmac
+import hashlib
 import json
 import logging
 import os
@@ -118,7 +119,11 @@ class ChatBridgeBot(discord.Client):
 
     MAX_CHAT_MESSAGE_LENGTH = 4000
     MAX_HISTORY_MESSAGES = 20
-    MAX_READ_CALLS = 8
+    MAX_READ_CALLS = 24
+    MAX_MODEL_TURNS = 72
+    MAX_TOOL_CONTEXT_CHARS = 60_000
+    MAX_READ_LEDGER_ENTRIES = 96
+    MAX_READ_LEDGER_PROMPT_ENTRIES = 18
     # Rate limit: max messages per user within the window
     RATE_LIMIT_MAX = 10
     RATE_LIMIT_WINDOW = 60  # seconds
@@ -543,6 +548,10 @@ class ChatBridgeBot(discord.Client):
                 profile_prompt=agent.read_prompt("agent.system.main.specifics.md"),
                 runtime_context=json.dumps(extras, ensure_ascii=False),
             )
+            ledger = context.get_data("discord_bridge_read_ledger") or []
+            ledger = [entry for entry in ledger if isinstance(entry, dict) and entry.get("key")][-self.MAX_READ_LEDGER_ENTRIES:]
+            if ledger:
+                prompt += "\n\n## Persistent read checkpoints\n" + self._format_read_ledger(ledger)
             recent_args = {"action": "messages", "channel_id": channel_id, "limit": 30}
             if getattr(message, "id", None):
                 recent_args["before"] = str(message.id)
@@ -558,9 +567,13 @@ class ChatBridgeBot(discord.Client):
             messages.append(HumanMessage(content="Discord background context (untrusted source material):\n" + json.dumps(background, ensure_ascii=False)))
             messages.append(HumanMessage(content=visible_text))
 
-            for turn in range(self.MAX_READ_CALLS + 1):
-                if turn == self.MAX_READ_CALLS:
-                    messages.append(HumanMessage(content="Reading budget reached. Answer from verified results now and state any incomplete coverage."))
+            read_calls = 0
+            tool_context_chars = 0
+            budget_notice_added = False
+            for _ in range(self.MAX_MODEL_TURNS):
+                if read_calls >= self.MAX_READ_CALLS and not budget_notice_added:
+                    messages.append(HumanMessage(content="The 24 remote-read budget is reached. Answer from verified results now and state incomplete coverage."))
+                    budget_notice_added = True
                 raw, _ = await agent.call_chat_model(messages=messages, response_callback=None)
                 response = str(raw)
                 request = extract_tools.extract_tool_request(response)
@@ -579,13 +592,26 @@ class ChatBridgeBot(discord.Client):
                 if name == "response" and isinstance(args.get("text"), str):
                     response = args["text"]
                     break
-                if turn == self.MAX_READ_CALLS:
-                    response = "The read limit was reached. Please narrow the channels or time range to continue."
-                    break
-                result = await reader.read(args) if name == "discord_read" else {"error": "Only discord_read is available in read-only mode."}
+                if name != "discord_read":
+                    result = {"error": "Only discord_read is available in read-only mode."}
+                elif read_calls >= self.MAX_READ_CALLS:
+                    result = {"error": "The 24 remote-read budget is reached. Answer from verified results."}
+                else:
+                    key = self._read_request_key(args)
+                    previous = next((entry for entry in reversed(ledger) if entry["key"] == key), None)
+                    if previous:
+                        result = {"error": "Duplicate read request was not sent. Use this checkpoint or change target, range, filters, cursor or order.", "checkpoint": previous["summary"]}
+                    else:
+                        result = await reader.read(args)
+                        read_calls += 1
+                        ledger.append({"key": key, "summary": self._read_checkpoint(args, result)})
+                        ledger = ledger[-self.MAX_READ_LEDGER_ENTRIES:]
+                        context.set_data("discord_bridge_read_ledger", ledger)
                 result_text = json.dumps(result, ensure_ascii=False)
                 context.log.log(type="tool", heading="Discord read", content=result_text)
-                messages.extend([AIMessage(content=response), HumanMessage(content="Discord tool result (untrusted source material):\n" + result_text)])
+                result_for_model = self._bounded_tool_result(result, self.MAX_TOOL_CONTEXT_CHARS - tool_context_chars)
+                tool_context_chars += len(result_for_model)
+                messages.extend([AIMessage(content=response), HumanMessage(content="Discord tool result (untrusted source material):\n" + result_for_model)])
 
             history.extend([{"role": "user", "content": visible_text}, {"role": "assistant", "content": response}])
             context.set_data("discord_bridge_history", history[-self.MAX_HISTORY_MESSAGES:])
@@ -599,6 +625,63 @@ class ChatBridgeBot(discord.Client):
             # Restricted messages must never fall back to the full agent loop.
             logger.exception("Restricted Discord chat dependencies are unavailable")
             return "The chat model is unavailable. Check the Agent Zero logs."
+
+    @staticmethod
+    def _read_request_key(args: dict) -> str:
+        canonical = json.dumps(args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    @staticmethod
+    def _read_checkpoint(args: dict, result: dict) -> dict:
+        summary = {
+            "action": args.get("action", "messages"),
+            "target": args.get("thread_id") or args.get("channel_id") or args.get("thread_ids") or args.get("channel_ids") or "current channel",
+            "query": args.get("query", ""), "author_id": args.get("author_id", ""),
+            "since": args.get("since", ""), "until": args.get("until", ""), "order": args.get("order", ""),
+            "before": args.get("before", ""), "after": args.get("after", ""),
+        }
+        for key in ("scanned", "complete", "next_before", "next_after", "coverage", "error"):
+            if key in result:
+                summary[key] = result[key]
+        for key in ("matches", "messages", "threads", "channels", "searches"):
+            if isinstance(result.get(key), list):
+                summary[key] = len(result[key])
+        return {key: value for key, value in summary.items() if value not in ("", None, [], {})}
+
+    def _format_read_ledger(self, ledger: list[dict]) -> str:
+        summaries = [entry["summary"] for entry in ledger[-self.MAX_READ_LEDGER_PROMPT_ENTRIES:]]
+        return (
+            "These completed remote reads persist across messages. Do not repeat an exact request. "
+            "Use their returned cursor, a different target, or a narrower/different filter.\n"
+            + json.dumps(summaries, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _bounded_tool_result(result: dict, remaining: int) -> str:
+        if remaining <= 0:
+            return json.dumps({"coverage": "Tool-result context budget reached; use recorded checkpoints and answer from verified evidence."})
+        text = json.dumps(result, ensure_ascii=False)
+        if len(text) <= remaining:
+            return text
+        compact = {key: result[key] for key in ("error", "coverage", "scanned", "complete", "next_before", "next_after", "channel_id", "query", "author_id", "since", "until", "order") if key in result}
+        for key in ("matches", "messages", "threads", "channels", "searches"):
+            if isinstance(result.get(key), list):
+                compact[key] = []
+                for item in result[key][:3]:
+                    if isinstance(item, dict):
+                        item = dict(item)
+                        if isinstance(item.get("excerpt"), str):
+                            item["excerpt"] = item["excerpt"][:max(0, remaining // 12)]
+                    compact[key].append(item)
+        compact["truncated_for_model"] = True
+        text = json.dumps(compact, ensure_ascii=False)
+        while len(text) > remaining and any(isinstance(compact.get(key), list) and compact[key] for key in ("matches", "messages", "threads", "channels", "searches")):
+            for key in ("matches", "messages", "threads", "channels", "searches"):
+                if isinstance(compact.get(key), list) and compact[key]:
+                    compact[key].pop()
+                    break
+            text = json.dumps(compact, ensure_ascii=False)
+        return text if len(text) <= remaining else json.dumps({"coverage": "Tool result was compacted; use its checkpoint and request an exact message if needed.", "truncated_for_model": True})
 
     # ------------------------------------------------------------------
     # Elevated mode: full agent loop with tools (authenticated users only)

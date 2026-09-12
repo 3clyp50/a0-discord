@@ -70,6 +70,14 @@ async def main():
     assert len(channel.calls) == 1 and channel.calls[0]["oldest_first"]
     assert channel.calls[0]["before"].id == discord.utils.time_snowflake(day + timedelta(days=1))
 
+    second_channel = Channel()
+    second_channel.id, second_channel.name = 303, "releases"
+    guild.channels.append(second_channel)
+    bot.get_channel = lambda n: {101: channel, 202: hidden, 303: second_channel}.get(n)
+    batched = await reader.read({**query, "channel_ids": ["101", "303"], "scan_limit": 1000})
+    assert len(batched["searches"]) == 2
+    assert all(result["scanned"] <= 250 and len(result["matches"]) <= 4 for result in batched["searches"])
+
     items[:] = [message(day + timedelta(minutes=i), "OpenCode Go " + str(i)) for i in range(5)]
     first = await reader.read({**query, "scan_limit": 2})
     assert not first["complete"] and len(first["matches"]) == 2

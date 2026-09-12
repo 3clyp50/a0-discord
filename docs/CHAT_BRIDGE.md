@@ -16,7 +16,7 @@ Register a channel only to receive replies to every message. Unregistering remov
 
 The bridge uses a dedicated read-only reader. It does not run the normal agent loop, generic tools, shell commands or skill workflows. A profile's instructions do not grant capabilities outside that reader. The normal Agent Zero tool baseline is separately limited to `discord_read` and `discord_send`.
 
-Each turn includes up to 30 recent channel messages and its replied-to message. The model can make up to eight additional reads to find evidence. Full history pages contain at most 100 messages and approximately 40,000 serialized characters; they are not the full channel or server.
+Each turn includes up to 30 recent channel messages and its replied-to message. The model can make up to 24 remote reads to find evidence. Full history pages contain at most 100 messages and approximately 12,000 serialized characters; they are not the full channel or server. The model receives at most 60,000 characters of tool results per response; full tool results remain in the saved chat log.
 
 Readable channels must be in the current permitted server. Both bot and requester must have View Channel and Read Message History permissions. Private threads additionally require membership unless the member can manage threads. Authentication messages are excluded, and access never falls back to user-account credentials.
 
@@ -24,7 +24,7 @@ Readable channels must be in the current permitted server. Both bot and requeste
 
 Use the bridge reader's `search` action for a known topic, author or date rather than paging raw history into the prompt. This action is specific to the bridge, not the ordinary Agent Zero `discord_read` tool.
 
-- `channel_id`: exact channel name, such as `#general`, or an ID. `thread_id` selects one thread.
+- `channel_id`: exact channel name, such as `#general`, or an ID. `thread_id` selects one thread. `channel_ids` or `thread_ids` batch up to four already-known targets.
 - `query`: all words must match, case-insensitively, across text, embeds or attachment names. Attachment contents are not searched.
 - `author_id`: exact user ID, or `me` for the requester.
 - `since` / `until`: ISO dates or timestamps. Start inclusive; end exclusive. Missing timezone means UTC.
@@ -32,11 +32,11 @@ Use the bridge reader's `search` action for a known topic, author or date rather
 - `limit`: up to 20 matching excerpts. `scan_limit`: up to 1,000 messages per call.
 - `include_bots`: false by default, preventing bot summaries from masquerading as original announcements.
 
-Dates jump directly to Discord history cursors. Filtering runs inside the plugin; only matching excerpts enter model context, capped at approximately 12,000 characters. Retrieve a promising result using `messages`, the same channel ID and its exact `message_id` to inspect full wording.
+Dates jump directly to Discord history cursors. Filtering runs inside the plugin; only matching excerpts enter model context, capped at approximately 8,000 characters. Batched searches scan no more than 250 messages and return at most four shortened matches per target. Retrieve a promising result using `messages`, the same channel ID and its exact `message_id` to inspect full wording.
 
-Results include `scanned`, `complete`, and `next_before` or `next_after`. Resume partial results with that cursor and identical filters. An empty partial scan is not proof of absence; a found post is not necessarily the first across other channels or threads. Searches apply to one channel or thread, not recursively to all its threads.
+Results include `scanned`, `complete`, and `next_before` or `next_after`. Resume partial results with that cursor and identical filters. An empty partial scan is not proof of absence; a found post is not necessarily the first across other channels or threads. Searches apply to one channel or thread, not recursively to all its threads. Completed reads are retained as compact per-chat checkpoints. Repeating an exact request returns that checkpoint without another Discord call; change the target, range, filters, cursor or order instead.
 
-The reader can list visible channels, active threads, and public archived threads for a parent. Archive pagination uses archive timestamps, not creation IDs.
+The reader can list visible channels, active threads, and public archived threads for a parent. Thread listings accept a name query and date range, return no more than 30 records, and archive pagination uses archive timestamps, not creation IDs.
 
 ## Elevated sessions
 

@@ -13,9 +13,11 @@ from usr.plugins.discord.helpers.sanitize import (
 
 
 class BridgeReader:
-    MAX_OUTPUT_CHARS = 40000
+    MAX_OUTPUT_CHARS = 12000
     MAX_SEARCH_MESSAGES = 1000
-    MAX_SEARCH_OUTPUT_CHARS = 12000
+    MAX_SEARCH_OUTPUT_CHARS = 8000
+    MAX_THREADS_RETURNED = 30
+    MAX_BATCH_SEARCH_TARGETS = 4
 
     def __init__(self, bot, message):
         self.bot = bot
@@ -116,6 +118,32 @@ class BridgeReader:
                 discord.Object(id=after) if after is not None else None, dates)
 
     async def _search(self, args):
+        target_key = "thread_ids" if args.get("thread_ids") is not None else "channel_ids"
+        targets = args.get(target_key)
+        if targets is not None:
+            if not isinstance(targets, list) or not 1 <= len(targets) <= self.MAX_BATCH_SEARCH_TARGETS:
+                raise ValueError(f"{target_key} must contain 1-{self.MAX_BATCH_SEARCH_TARGETS} channel or thread IDs.")
+            if any(not isinstance(target, (str, int)) or not str(target) for target in targets):
+                raise ValueError(f"{target_key} must contain channel or thread IDs.")
+            base = {key: value for key, value in args.items() if key not in ("channel_ids", "thread_ids", "channel_id", "thread_id")}
+            results = []
+            for target in dict.fromkeys(map(str, targets)):
+                child = {
+                    **base,
+                    "limit": min(max(1, int(base.get("limit", 10))), 4),
+                    "scan_limit": min(max(1, int(base.get("scan_limit", self.MAX_SEARCH_MESSAGES))), 250),
+                    "thread_id" if target_key == "thread_ids" else "channel_id": target,
+                }
+                result = await self._search(child)
+                for match in result.get("matches", []):
+                    if len(match.get("excerpt", "")) > 360:
+                        match["excerpt"] = match["excerpt"][:360]
+                        match["excerpt_truncated"] = True
+                results.append(result)
+            return {
+                "searches": results,
+                "coverage": "One bounded search per supplied target. Each target scanned at most 250 messages and returns at most four compact matches."
+            }
         query = str(args.get("query", "") or "").strip()
         if len(query) > 200:
             raise ValueError("Search query must be at most 200 characters.")
@@ -207,20 +235,40 @@ class BridgeReader:
             if action == "threads":
                 if self.guild is None:
                     raise ValueError("Threads require a server.")
+                query = str(args.get("query", "") or "").strip()
+                if len(query) > 200:
+                    raise ValueError("Thread query must be at most 200 characters.")
+                terms = re.findall(r"[^\W_]+", query.casefold())
+                _, _, dates = self._history_bounds({key: value for key, value in args.items() if key not in ("before", "after")})
+                since = datetime.fromisoformat(dates["since"]) if dates.get("since") else None
+                until = datetime.fromisoformat(dates["until"]) if dates.get("until") else None
                 parent = await self._channel(args["channel_id"]) if args.get("channel_id") else None
                 threads = []
+                def matches(thread):
+                    if terms and not all(term in str(thread.name).casefold() for term in terms):
+                        return False
+                    stamp = getattr(thread, "created_at", None) or getattr(thread, "archive_timestamp", None)
+                    if stamp:
+                        stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp.astimezone(timezone.utc)
+                        if (since and stamp < since) or (until and stamp >= until):
+                            return False
+                    return True
                 for thread in await self.guild.active_threads():
-                    if (parent is None or thread.parent_id == parent.id) and await self._visible(thread):
+                    if (parent is None or thread.parent_id == parent.id) and matches(thread) and await self._visible(thread):
                         threads.append(self.channel_record(thread))
+                        if len(threads) >= self.MAX_THREADS_RETURNED:
+                            break
                 cursor = None
-                if parent is not None and hasattr(parent, "archived_threads"):
-                    before = datetime.fromisoformat(args["before"]) if args.get("before") else None
+                if len(threads) < self.MAX_THREADS_RETURNED and parent is not None and hasattr(parent, "archived_threads"):
+                    before = datetime.fromisoformat(str(args["before"]).replace("Z", "+00:00")) if args.get("before") else None
                     async for thread in parent.archived_threads(limit=limit, before=before):
                         cursor = thread.archive_timestamp.isoformat()
-                        if await self._visible(thread):
+                        if matches(thread) and await self._visible(thread):
                             threads.append(self.channel_record(thread))
-                return {"threads": threads, "next_before": cursor,
-                        "coverage": "Active threads; also one page of public archived threads when channel_id is supplied."}
+                            if len(threads) >= self.MAX_THREADS_RETURNED:
+                                break
+                return {"threads": threads, "next_before": cursor, "query": query, **dates,
+                        "coverage": "Filtered active threads; also one page of public archived threads when channel_id is supplied. Results are capped at 30."}
             if action != "messages":
                 raise ValueError("Use search, messages, channels, or threads. This reader cannot write or execute code.")
             channel = await self._channel(args.get("thread_id") or args.get("channel_id"))
