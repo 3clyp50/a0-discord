@@ -147,6 +147,23 @@ and modal lifecycle coverage.
 
 ---
 
+## Tool prompt maintenance
+
+Public tool prompts live in `prompts/agent.system.tool.discord_read.md` and
+`prompts/agent.system.tool.discord_send.md`. The read-only bridge has a separate
+protocol in `prompts/discord.bridge.md`; do not mix its actions or limits with
+the public reader.
+
+Use terse directives while preserving argument names, defaults, limits, complete
+JSON examples, permission boundaries and pagination rules. Compare `o200k_base`
+token counts, not character counts. Template measurements exclude the injected
+profile, runtime facts, checkpoints and history.
+
+Verify rendered profile/runtime placeholders, parse examples with the framework
+tool extractor and compare native tool names/schemas. Run the offline
+`test_skill_workflows`, `test_mentions`, `test_bridge_search` and
+`test_bridge_ledger` modules in the framework runtime.
+
 ## Adding a New Tool
 
 ### Step 1: Create the tool file
