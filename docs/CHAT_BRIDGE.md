@@ -12,6 +12,14 @@ For agent-driven operations, load `discord-chat` and read [its bridge reference]
 
 Register a channel only to receive replies to every message. Unregistering removes its bridge mapping, not its saved Agent Zero chat. Bot labels can change without losing their stable IDs. Legacy single-bot mappings remain under `default`.
 
+## Bot instructions
+
+Use **Config > bot > Instructions** for the bot's role, tone and workflows instead of creating a dedicated agent profile. The multiline field accepts Markdown and supplements the selected profile without replacing its capabilities or granting tool access.
+
+Saved instructions are read when building each prompt, including existing chats. They apply to the read-only bridge and the root agent in Discord-linked chats, including full-agent slash requests and their WebUI chat. Other bots, ordinary WebUI chats and subordinate agents do not inherit them. Clearing the field removes the added guidance on the next prompt; it does not erase earlier chat history.
+
+Profile and preset defaults still apply only to new chats. When moving guidance out of a custom profile, update existing chats' profiles separately if needed.
+
 ## Read-only operation
 
 The bridge uses a dedicated read-only reader. It does not run the normal agent loop, generic tools, shell commands or skill workflows. A profile's instructions do not grant capabilities outside that reader. The normal Agent Zero tool baseline is separately limited to `discord_read` and `discord_send`.

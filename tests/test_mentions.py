@@ -36,6 +36,7 @@ async def main():
         "chat_bridge": {
             "auto_start": True, "allowed_users": [456],
             "default_preset": "Default", "default_agent_profile": "developer",
+            "instructions": "Report bugs concisely.\nPreserve `source links` and {{literal braces}}.",
         },
     }
     channel = SimpleNamespace(id=101, name="mention-check", typing=nullcontext, send=AsyncMock())
@@ -64,6 +65,8 @@ async def main():
             assert ctx.get_data("chat_model_override") == {"preset_name": "Default"}
             system = model.call_args.kwargs["messages"][0].content
             assert "## Developer" in system and '"model":' in system and '"preset": "Default"' in system
+            assert config["chat_bridge"]["instructions"] in system
+            assert "only discord_read executes" in system
             assert "recent_channel_messages" in model.call_args.kwargs["messages"][-2].content
             saved = json.loads((Path(tmp) / ctxid / "chat.json").read_text())
             logs = saved["log"]["logs"]
@@ -154,7 +157,11 @@ async def main():
             restored = persist_chat._deserialize_context(serialized)
             assert not hasattr(restored.agent0, "loop_data"), "Reproduce the restored-chat lifecycle"
             message.content = "<@123> after restarting"
+            config["chat_bridge"]["instructions"] = "Updated instructions for this existing chat."
             await bot.on_message(message)
+            system = model.call_args.kwargs["messages"][0].content
+            assert config["chat_bridge"]["instructions"] in system
+            assert "Report bugs concisely." not in system
             assert channel.send.call_args.args[0] == "Mention received."
             assert restored.agent0.loop_data.last_response == "Mention received."
             assert bridge.get_context_id("101") == ctxid

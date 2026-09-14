@@ -39,6 +39,8 @@ polling:
 # Chat bridge — Discord as a chat frontend to Agent Zero
 chat_bridge:
   auto_start: false
+  # Additional instructions for this bot, alongside its selected agent profile.
+  instructions: ""
   # Channels are managed via the discord_chat tool, not config
   # Optional default model preset for the Discord bridge chat context.
   # Leave empty to use the system scoped default.

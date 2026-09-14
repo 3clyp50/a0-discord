@@ -523,9 +523,13 @@ class ChatBridgeBot(discord.Client):
                 "discord_context": {"guild_id": str(message.guild.id) if message.guild else None,
                                     "channel_id": channel_id, "requester_id": str(message.author.id)},
             }
+            profile_prompt = agent.read_prompt("agent.system.main.specifics.md")
+            instructions = self._get_config().get("chat_bridge", {}).get("instructions", "").strip()
+            if instructions:
+                profile_prompt += "\n\n## Discord bot instructions\n" + instructions
             prompt = agent.read_prompt(
                 "discord.bridge.md",
-                profile_prompt=agent.read_prompt("agent.system.main.specifics.md"),
+                profile_prompt=profile_prompt,
                 runtime_context=json.dumps(extras, ensure_ascii=False),
             )
             ledger = context.get_data("discord_bridge_read_ledger") or []

@@ -51,12 +51,14 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
     vm.runInNewContext(source, sandbox);
     const store = sandbox.store;
     const config = { bots: [
-        { id: "first", name: "First", token: "secret-one" },
+        { id: "first", name: "First", token: "secret-one", chat_bridge: { instructions: "Report bugs.\nKeep `source links`." } },
         { id: "second", name: "Second", token: "secret-two" },
     ] };
     const context = { projectName: "", agentProfileKey: "" };
     await store.initConfig(config, context);
     const [first, second] = config.bots;
+    assert.equal(first.chat_bridge.instructions, "Report bugs.\nKeep `source links`.");
+    assert.equal(second.chat_bridge.instructions, "");
     assert.equal(timers.size, 1);
     assert.equal(store.statusLabel(first), "Connected");
     assert.deepEqual(Array.from(store.controlsFor(first), control => control.action), ["stop", "restart"]);
@@ -90,6 +92,7 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
     assert.equal(calls.at(-1).action, "revoke");
     assert.equal(JSON.stringify(config).includes("auth_key"), false);
     context.addDiscordBot();
+    assert.equal(config.bots[2].chat_bridge.instructions, "");
     const count = calls.length;
     await store.action(second, "restart");
     await store.action(config.bots[2], "start");

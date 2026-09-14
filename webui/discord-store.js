@@ -10,7 +10,7 @@ function newBot() {
         id: crypto.randomUUID(), name: "", token: "", enabled: true, servers: [],
         chat_bridge: {
             auto_start: false, default_preset: "", default_agent_profile: "",
-            allowed_users: [],
+            allowed_users: [], instructions: "",
         },
     };
 }

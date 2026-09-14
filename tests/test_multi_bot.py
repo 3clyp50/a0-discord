@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from usr.plugins.discord.helpers import discord_bot as bridge
 from usr.plugins.discord.helpers.discord_client import get_bot_configs, get_discord_config
 from usr.plugins.discord.hooks import save_plugin_config
+from usr.plugins.discord.extensions.python.system_prompt._20_discord_instructions import DiscordInstructions
 
 
 async def main():
@@ -15,9 +16,13 @@ async def main():
     migrated = save_plugin_config(legacy)
     first = migrated["bots"][0]
     assert first["id"] == "default" and first["chat_bridge"]["default_preset"] == "Original"
+    assert first["chat_bridge"]["instructions"] == ""
     second = {"id": "support", "name": "Support", "token": "second", "enabled": True,
               "servers": [123], "chat_bridge": {"auto_start": True, "default_preset": "Support"}}
     migrated["bots"].append(second)
+    instructions = "Report bugs concisely.\nKeep `source links` and {{literal braces}}.\n"
+    second["chat_bridge"]["instructions"] = instructions
+    assert save_plugin_config(migrated)["bots"][1]["chat_bridge"]["instructions"] == instructions
     with patch("helpers.plugins.get_plugin_config", return_value=migrated), patch.dict("os.environ", {}, clear=True):
         selected = get_discord_config(bot_id="support")
         assert selected["bot"]["token"] == "second"
@@ -25,6 +30,29 @@ async def main():
         agent = SimpleNamespace(context=SimpleNamespace(get_data=lambda _: "support"))
         assert get_discord_config(agent)["bot_id"] == "support"
         assert get_discord_config()["bot"]["token"] == "first"
+        selected_id = "support"
+        prompt_agent = SimpleNamespace(number=0, context=SimpleNamespace(get_data=lambda _: selected_id))
+        extension = DiscordInstructions(agent=prompt_agent)
+        system = ["Original profile"]
+        await extension.execute(system_prompt=system)
+        assert system == ["Original profile", "## Discord bot instructions\n" + instructions.strip()]
+        second["chat_bridge"]["instructions"] = "Updated instructions"
+        system = []
+        await extension.execute(system_prompt=system)
+        assert system == ["## Discord bot instructions\nUpdated instructions"]
+        for selected_id in (None, "default", "missing"):
+            system = []
+            await extension.execute(system_prompt=system)
+            assert not system, "Instructions must not leak to other bots or ordinary chats"
+        selected_id = "support"
+        prompt_agent.number = 1
+        system = []
+        await extension.execute(system_prompt=system)
+        assert not system, "The bot's role must not replace subordinate roles"
+        prompt_agent.number = 0
+        second["chat_bridge"]["instructions"] = " \n\t"
+        await extension.execute(system_prompt=system)
+        assert not system
         try:
             get_discord_config(bot_id="missing")
         except ValueError:
@@ -61,6 +89,13 @@ async def main():
         pass
     else:
         raise AssertionError("Duplicate bot tokens must be rejected")
+    for value in (None, 123, [], {}):
+        try:
+            save_plugin_config({"bots": [{"id": "invalid", "chat_bridge": {"instructions": value}}]})
+        except ValueError as error:
+            assert "instructions must be text" in str(error)
+        else:
+            raise AssertionError("Non-text instructions must be rejected")
     print("Multi-bot configuration, routing, state and lifecycle checks passed.")
 
 

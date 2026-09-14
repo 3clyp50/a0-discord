@@ -142,8 +142,10 @@ def save_plugin_config(settings: dict, **kwargs) -> dict:
         if not isinstance(bridge, dict):
             raise ValueError("Discord chat bridge settings must be an object.")
         bridge = {key: value for key, value in bridge.items()
-                  if key in ("auto_start", "default_preset", "default_agent_profile", "allowed_users")}
+                  if key in ("auto_start", "default_preset", "default_agent_profile", "allowed_users", "instructions")}
         bot["chat_bridge"] = bridge
+        if not isinstance(bridge.setdefault("instructions", ""), str):
+            raise ValueError("Discord instructions must be text.")
         for owner, field in ((bot, "servers"), (bridge, "allowed_users")):
             values = owner.get(field, [])
             if not isinstance(values, list) or any(not str(value).isdigit() for value in values):

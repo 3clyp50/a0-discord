@@ -54,6 +54,16 @@
                                 <div class="field-label"><div class="field-title">Bot name</div><div class="field-description">Rename this label without losing existing chats.</div></div>
                                 <div class="field-control"><input type="text" x-model="bot.name" aria-label="Bot name" placeholder="A0 Bug-Sweeper" /></div>
                             </div>
+                            <div class="field field-full">
+                                <div class="field-label">
+                                    <div class="field-title">Instructions</div>
+                                    <div class="field-description">Additional guidance for this bot, alongside its agent profile. Applies to new and existing chats in both access modes after Save. Does not grant tool access.</div>
+                                </div>
+                                <div class="field-control">
+                                    <textarea rows="8" x-model="bot.chat_bridge.instructions" aria-label="Instructions"
+                                        placeholder="Describe this bot's role, tone and workflows. Markdown is supported."></textarea>
+                                </div>
+                            </div>
                             <div class="field">
                                 <div class="field-label"><div class="field-title">Enabled</div><div class="field-description">Disabled bots disconnect and cannot be started.</div></div>
                                 <div class="field-control"><label class="toggle"><input type="checkbox" x-model="bot.enabled" aria-label="Enable bot" /><span class="toggler"></span></label></div>
@@ -332,6 +342,7 @@
         .discord-config .section-description { margin-bottom: var(--spacing-md); }
         .discord-config-heading .section-title { margin-top: 0; }
         .discord-config .field-control { min-width: 0; }
+        .discord-config .field.field-full { grid-template-columns: 1fr; gap: var(--spacing-sm); }
         .discord-config code { overflow-wrap: anywhere; }
         .discord-access-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-md); padding: var(--spacing-sm) 0; border-bottom: 1px solid var(--color-border); }
         .discord-access-identity { display: flex; flex-direction: column; gap: var(--spacing-xs); flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
