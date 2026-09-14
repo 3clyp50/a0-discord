@@ -780,14 +780,28 @@ class ChatBridgeBot(discord.Client):
     # ------------------------------------------------------------------
 
     async def _send_response(self, channel: discord.TextChannel, text: str, reference=None):
-        """Send a response to Discord, splitting long messages."""
-        if not text:
-            text = "(No response)"
+        """Attach fenced blocks; use balanced text when uploads are unavailable."""
+        import io
+        from usr.plugins.discord.helpers.delivery import DEFAULT_UPLOAD_LIMIT, deliver_message
 
-        chunks = _split_message(text)
-        for i, chunk in enumerate(chunks):
-            ref = reference if i == 0 else None
-            await channel.send(chunk, reference=ref)
+        async def send(content, files, first):
+            uploads = [discord.File(io.BytesIO(data), filename=name) for name, data in files]
+            try:
+                return await channel.send(
+                    content, reference=reference if first else None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    **({"files": uploads} if uploads else {}),
+                )
+            finally:
+                for upload in uploads:
+                    upload.close()
+                    upload.fp.close()
+
+        interaction = getattr(channel, "interaction", None)
+        upload_limit = getattr(interaction, "filesize_limit", None) or getattr(
+            getattr(channel, "guild", None), "filesize_limit", DEFAULT_UPLOAD_LIMIT
+        )
+        return await deliver_message(send, text or "(No response)", upload_limit=upload_limit)
 
     async def start_bot(self):
         """Start the bot (non-blocking within an existing event loop)."""
@@ -799,24 +813,6 @@ class ChatBridgeBot(discord.Client):
             await asyncio.wait_for(self.wait_until_ready(), timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError("Bot failed to connect within timeout")
-
-
-def _split_message(content: str, max_length: int = 2000) -> list[str]:
-    if len(content) <= max_length:
-        return [content]
-    chunks = []
-    while content:
-        if len(content) <= max_length:
-            chunks.append(content)
-            break
-        split_at = content.rfind("\n", 0, max_length)
-        if split_at == -1:
-            split_at = content.rfind(" ", 0, max_length)
-        if split_at == -1:
-            split_at = max_length
-        chunks.append(content[:split_at])
-        content = content[split_at:].lstrip("\n")
-    return chunks
 
 
 def _is_bot_alive(bot_id: str = "default") -> bool:

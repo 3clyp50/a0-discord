@@ -1,5 +1,7 @@
 import asyncio
 import aiohttp
+import json
+import mimetypes
 import os
 import time
 from copy import deepcopy
@@ -126,7 +128,6 @@ class DiscordClient:
             self._session = aiohttp.ClientSession(
                 headers={
                     "Authorization": f"{auth_prefix}{self.token}",
-                    "Content-Type": "application/json",
                     "User-Agent": "AgentZero-DiscordPlugin/1.0",
                 }
             )
@@ -135,14 +136,23 @@ class DiscordClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def _request(self, method: str, endpoint: str, **kwargs) -> dict | list | None:
+    async def _request(self, method: str, endpoint: str, *, files=None, **kwargs) -> dict | list | None:
         await self._ensure_session()
         url = f"{DISCORD_API_BASE}{endpoint}"
         bucket = f"{method}:{endpoint.split('?')[0]}"
 
         await self._rate_limiter.wait(bucket)
 
-        async with self._session.request(method, url, **kwargs) as resp:
+        request_kwargs = dict(kwargs)
+        if files:
+            # Build fresh multipart data on every rate-limit retry.
+            form = aiohttp.FormData()
+            form.add_field("payload_json", json.dumps(request_kwargs.pop("json", {})), content_type="application/json")
+            for index, (filename, data) in enumerate(files):
+                form.add_field(f"files[{index}]", data, filename=filename,
+                               content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream")
+            request_kwargs["data"] = form
+        async with self._session.request(method, url, **request_kwargs) as resp:
             self._rate_limiter.update(bucket, dict(resp.headers))
 
             if resp.status == 204:
@@ -150,7 +160,7 @@ class DiscordClient:
             if resp.status == 429:
                 retry_after = (await resp.json()).get("retry_after", 1.0)
                 await asyncio.sleep(retry_after)
-                return await self._request(method, endpoint, **kwargs)
+                return await self._request(method, endpoint, files=files, **kwargs)
             if resp.status >= 400:
                 body = await resp.text()
                 raise DiscordAPIError(resp.status, body, endpoint)
@@ -232,13 +242,18 @@ class DiscordClient:
     # --- Sending (bot only) ---
 
     async def send_message(
-        self, channel_id: str, content: str, reply_to: Optional[str] = None,
+        self, channel_id: str, content: Optional[str] = None, reply_to: Optional[str] = None,
+        files: Optional[list[tuple[str, bytes]]] = None,
     ) -> dict:
         self._assert_bot_only("send_message")
-        payload = {"content": content}
+        payload = {"allowed_mentions": {"parse": [], "replied_user": False}}
+        if content:
+            payload["content"] = content
+        if files:
+            payload["attachments"] = [{"id": index, "filename": name} for index, (name, _data) in enumerate(files)]
         if reply_to:
             payload["message_reference"] = {"message_id": reply_to}
-        return await self._request("POST", f"/channels/{channel_id}/messages", json=payload)
+        return await self._request("POST", f"/channels/{channel_id}/messages", json=payload, files=files)
 
     async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
         self._assert_bot_only("add_reaction")

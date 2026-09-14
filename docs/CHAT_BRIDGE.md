@@ -62,9 +62,19 @@ Results contain flat matches with channel IDs, shared filters, checked channel I
 
 Threads, forum posts and archives remain a separate search scope. A completed channel sweep is never proof of complete thread coverage. An author-only sweep also cannot rule out related discussion by other members: use topic alternatives or PR-link searches across authors, then inspect matching messages and their surrounding discussion.
 
-The model can include a short `progress` string in a subsequent `discord_read` call after finding a lead. The bridge sends at most one such update per response, with mentions disabled, then continues gathering evidence. In read-only mode reports can be drafted inline, but files cannot be created or attached.
+The model can include a short `progress` string in a subsequent `discord_read` call after finding a lead. The bridge sends at most one such update per response, with mentions disabled, then continues gathering evidence. Read-only replies can export their own fenced text as attachments, but cannot read or upload existing files.
 
 The reader can list visible channels, active threads, and public archived threads for a parent. Thread listings accept a name query and date range, return no more than 30 records, and archive pagination uses archive timestamps, not creation IDs.
+
+## File delivery
+
+Complete line-based fenced blocks in replies become attachments, even when short. The language selects the extension: `js`/`javascript` becomes `.js`, `md`/`markdown` becomes `.md`, and `text` becomes `.txt`. Common programming/data languages are supported; unlabelled blocks default to `.md`, unknown labels to `.txt`. Each file contains the block body without its outer fences. Longer outer fences preserve nested Markdown examples. Surrounding prose stays in chat.
+
+The same delivery path handles regular replies, slash-command output and `discord_send` content. It does not parse inline backticks, fetch URLs, interpret filenames in fence labels, or upload paths mentioned in prose. Unfinished fences stay inline. Generated files are built in memory and do not grant read-only sessions filesystem access.
+
+Approved agents can use `discord_send` with an explicit `attachments` list of absolute local file paths for documents, images and other requested artifacts. At most 10 regular files of 10 MiB each are accepted by this tool. Symlinks, devices, directories, URLs and oversized files are rejected before sending. Normal bot credentials, server restrictions, tool policy and bridge access approvals still apply.
+
+Gateway replies respect the server or interaction's upload limit. The REST tool uses a conservative 10 MiB limit. If uploads are denied or too large, generated text falls back to length-bounded messages with closed/reopened fences. Explicit files are never converted or silently discarded: failed uploads are reported in Discord and to the agent. Network/server errors are not retried as text because delivery may already have occurred. Output mentions are suppressed, and native `/a0` output remains private.
 
 ## Agent access approvals
 

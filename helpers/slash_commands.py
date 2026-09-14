@@ -33,9 +33,7 @@ class DiscordCommands:
 
     async def reply(self, context, text):
         # Command output must never ping users or roles, including script output.
-        from usr.plugins.discord.helpers.discord_bot import _split_message
-        for chunk in _split_message(text):
-            await self.message.channel.send(chunk, allowed_mentions=discord.AllowedMentions.none())
+        await self.bot._send_response(self.message.channel, text)
 
     async def handle(self, text):
         """Return rendered agent input, or None for a completed control command."""
