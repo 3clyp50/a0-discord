@@ -3,7 +3,10 @@ import json
 import os
 import re
 import stat
+from contextvars import ContextVar
 from pathlib import Path
+
+bridge_delivery = ContextVar("discord_bridge_delivery", default=None)
 
 DEFAULT_UPLOAD_LIMIT = 10 * 1024 * 1024
 MAX_ATTACHMENTS = 10

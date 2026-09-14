@@ -196,7 +196,7 @@ class ChatBridgeBot(discord.Client):
         # Per-user rate limiting: user_id -> deque of timestamps
         self._rate_limits: dict[str, collections.deque] = {}
         self._channel_locks: dict[str, asyncio.Lock] = {}
-        self._command_ids = collections.deque(maxlen=256)
+        self._message_ids = collections.deque(maxlen=256)
         from usr.plugins.discord.helpers.native_commands import create_tree
         self.command_tree = create_tree(self)
         self.commands_registered = False
@@ -388,6 +388,13 @@ class ChatBridgeBot(discord.Client):
         if not self._allows_user(message.author, message.guild):
             return
 
+        # Claim Gateway/interaction IDs before any await, not only slash commands.
+        message_id = getattr(message, "id", None)
+        if message_id is not None:
+            if message_id in self._message_ids:
+                return
+            self._message_ids.append(message_id)
+
         replied = await self._replied_message(message)
         replies_to_bot = replied is not None and self.user is not None and replied.author.id == self.user.id
         if channel_id not in chat_channels and not mentioned and not replies_to_bot and not command_invocation:
@@ -435,11 +442,6 @@ class ChatBridgeBot(discord.Client):
             await message.channel.send('Unknown command. Use /commands to list commands.')
             return
         if invocation['command_name']:
-            message_id = getattr(message, 'id', None)
-            if message_id is not None:
-                if message_id in self._command_ids:
-                    return
-                self._command_ids.append(message_id)
             if not self._has_tool_access(user_key, channel_id, message.guild.id if message.guild else None):
                 await message.channel.send(
                     'Agent Zero commands require Web UI approval for this user/channel. '
@@ -477,7 +479,8 @@ class ChatBridgeBot(discord.Client):
                 logger.exception("Discord message processing failed in channel %s", channel_id)
                 response_text = "An error occurred while processing your message."
 
-            await self._send_response(message.channel, response_text, reference=message)
+            if response_text is not None and response_text.strip() != "NO_REPLY":
+                await self._send_response(message.channel, response_text, reference=message)
 
     # ------------------------------------------------------------------
     # Read-only mode: profile-aware conversation and scoped Discord reading
@@ -704,7 +707,7 @@ class ChatBridgeBot(discord.Client):
     # Full agent loop: approved user/channel only
     # ------------------------------------------------------------------
 
-    async def _get_full_agent_response(self, channel_id: str, text: str, message: discord.Message, *, resolved_command=False, context=None) -> str:
+    async def _get_full_agent_response(self, channel_id: str, text: str, message: discord.Message, *, resolved_command=False, context=None) -> str | None:
         """Route through the full Agent Zero agent loop (tools, code execution, etc.).
 
         Both entry points and this final dispatch enforce the exact Web UI approval.
@@ -715,6 +718,7 @@ class ChatBridgeBot(discord.Client):
         try:
             from agent import UserMessage
             from helpers import message_queue
+            from usr.plugins.discord.helpers.delivery import bridge_delivery
 
             context = context or self._get_bridge_context(channel_id, message)
 
@@ -754,13 +758,23 @@ class ChatBridgeBot(discord.Client):
             message_queue.log_user_message(
                 context, prefixed_text, attachment_paths, source=" (Discord)"
             )
-            task = context.communicate(user_msg)
-            result = await task.result()
-
-            # Clean up temp files after processing
-            self._cleanup_temp_files()
-
-            return result if isinstance(result, str) else str(result)
+            # ContextVars follow DeferredTask into the agent's event-loop thread.
+            # No durable chat flag: WebUI runs, private interactions and later turns
+            # must not inherit another request's successful delivery.
+            receipt = {"bot_id": self.bot_id, "channel_id": channel_id,
+                       "context_id": context.id, "sent_ids": []}
+            token = bridge_delivery.set(
+                None if getattr(message.channel, "interaction", None) else receipt
+            )
+            try:
+                task = context.communicate(user_msg)
+                result = await task.result()
+                if receipt["sent_ids"]:
+                    return None
+                return result if isinstance(result, str) else str(result)
+            finally:
+                bridge_delivery.reset(token)
+                self._cleanup_temp_files()
 
         except ImportError:
             logger.exception("Approved Discord agent runtime is unavailable")

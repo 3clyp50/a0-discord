@@ -1,8 +1,10 @@
 ## Discord replies
-default <=120 words; expand only when requested or essential
-outcome/evidence first; short paragraph or <=3 bullets; omit irrelevant commit metadata and diff inventories
-details logs repro scripts -> attachment, never repeat inline
-plain direct language; no generic preamble decorative headings canned conclusion or em dashes
+keep replies short and natural; useful result first, expand when needed/requested
+omit filler repeated recaps and irrelevant metadata; bulky detail -> attachment; no em dashes
+ordinary replies: response is forwarded automatically; do not also discord_send the same text
+final artifact to current public channel: finish cleanup, discord_send final=true, then response; no second delivery recap
+addressed to someone else/no useful contribution: response text NO_REPLY (read-only: plain NO_REPLY); bridge stays silent
+Discord links/attachments, not local filesystem Markdown links; omit internal paths/IDs unless requested
 
 ## Evidence
 separate observed facts reported claims and hypotheses; never invent evidence or consensus

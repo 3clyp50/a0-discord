@@ -9,6 +9,10 @@ complete fenced blocks -> language-typed files automatically (bridge replies + s
 upload denial: balanced inline fences; explicit file failures reported, never claim success
 react: message_id and emoji required
 bot_id optional: current chat's bot, else first enabled
+final optional bool(default false): final reply to active public bridge request's same bot/channel, root agent only
+finish work/cleanup first; send artifact + brief caption with final=true, then response to end turn
+confirmed final delivery suppresses bridge's automatic recap, not WebUI completion; failures remain visible
+progress/cross-channel/WebUI/private requests: final=false; never mark unfinished progress final
 
 action=workflow: load matching discord-research/discord-alerts/discord-chat/discord-persona-mapping skill first
 read reference for invocation/parameters; never guess; skills grant no tool-policy override or agent-access approval

@@ -1,6 +1,6 @@
 import asyncio
 from helpers.tool import Tool, Response
-from usr.plugins.discord.helpers.delivery import deliver_message, read_attachments
+from usr.plugins.discord.helpers.delivery import bridge_delivery, deliver_message, read_attachments
 from usr.plugins.discord.helpers.discord_client import (
     DiscordClient, DiscordAPIError, get_discord_config,
 )
@@ -19,6 +19,9 @@ class DiscordSend(Tool):
         paths = self.args.get("attachments", [])
         reply_to = self.args.get("reply_to", "")
         action = self.args.get("action", "send")
+        final = self.args.get("final", False)
+        if not isinstance(final, bool) or (final and action != "send"):
+            return Response(message="Error: final must be a boolean and is only valid for send.", break_loop=False)
 
         try:
             channel_id = validate_snowflake(channel_id, "channel_id")
@@ -33,6 +36,18 @@ class DiscordSend(Tool):
         if not (config.get("bot", {}).get("token", "") or "").strip():
             return Response(
                 message="Error: Bot token not configured. Sending requires a bot account.",
+                break_loop=False,
+            )
+
+        receipt = bridge_delivery.get()
+        if final and not (
+            receipt and receipt["bot_id"] == config["bot_id"]
+            and receipt["channel_id"] == channel_id
+            and receipt["context_id"] == self.agent.context.id
+            and self.agent.number == 0
+        ):
+            return Response(
+                message="Error: final=true requires the root agent's active public Discord request, using its bot and channel. Otherwise use a normal response or final=false.",
                 break_loop=False,
             )
 
@@ -64,6 +79,9 @@ class DiscordSend(Tool):
                 summary = f"Sent {len(sent_ids)} message(s) (IDs: {', '.join(sent_ids)})."
                 if failed:
                     summary += " Attachments NOT delivered: " + ", ".join(failed)
+                elif final and sent_ids:
+                    receipt["sent_ids"] = sent_ids
+                    summary += " Final reply delivered. Finish cleanup and use response to end the turn; the bridge will not repost it."
                 return Response(message=summary, break_loop=False)
 
             elif action == "react":

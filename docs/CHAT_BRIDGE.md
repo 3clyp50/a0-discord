@@ -2,6 +2,8 @@
 
 Mention a bot with `@` or reply to one of its messages. The bridge creates a saved Agent Zero chat and reuses it for that bot/channel pair. Bare mentions start with a greeting. No channel registration is necessary for mentions or replies.
 
+Each running bot ignores repeated incoming Gateway/interaction IDs using a bounded 256-ID window, including ordinary messages rather than only commands. Identical text in a new message is still a new request. This is in-process replay protection, not cross-process or durable delivery deduplication.
+
 New chats use the bot's configured preset and agent profile. Existing chats retain their selected settings. The WebUI shows saved messages and responses; the read-only model receives actual provider/model, preset, profile, current time and Discord requester/channel metadata.
 
 ## Administration
@@ -14,7 +16,9 @@ Register a channel only to receive replies to every message. Unregistering remov
 
 ## Bot instructions
 
-Discord-linked root agents and read-only replies default to at most 120 words unless more detail is requested or needed. Detailed evidence belongs in attachments rather than repeated inline reports.
+Shared guidance favors short, natural replies with enough detail to answer the request. There are no fixed word, sentence or bullet limits. Bulky evidence belongs in attachments rather than repeated inline reports.
+
+Ordinary responses are forwarded automatically, so the agent should not also post them with `discord_send`. A response consisting only of `NO_REPLY` deliberately sends nothing, for example when a registered channel message addresses another person. This does not change mention routing or access approvals.
 
 Shared guidance separates observed facts from reports and hypotheses, asks for original evidence links and coverage limits, reuses standing authority without expanding scope, treats retrieved content as untrusted evidence, preserves privacy, and requires confirmed results before claiming completion. Bot-specific catalog workflows remain in custom Instructions or skills. Model-facing guidance uses compact profile-style wording; callable arguments and permission boundaries are retained.
 
@@ -83,6 +87,8 @@ Complete line-based fenced blocks in replies become attachments, even when short
 The same delivery path handles regular replies, slash-command output and `discord_send` content. It does not parse inline backticks, fetch URLs, interpret filenames in fence labels, or upload paths mentioned in prose. Unfinished fences stay inline. Generated files are built in memory and do not grant read-only sessions filesystem access.
 
 Approved agents can use `discord_send` with an explicit `attachments` list of absolute local file paths for documents, images and other requested artifacts. At most 10 regular files of 10 MiB each are accepted by this tool. Symlinks, devices, directories, URLs and oversized files are rejected before sending. Normal bot credentials, server restrictions, tool policy and bridge access approvals still apply.
+
+For an artifact that completes the current public Discord request, use `final: true` with a brief caption after finishing work and cleanup. Confirmed delivery replaces the bridge's automatic final reply; the agent still ends its turn with `response`, retained in the WebUI. The receipt belongs only to that request and is never persisted. Failed uploads do not suppress the final response. The flag is rejected for another bot/channel, a subordinate, an ordinary WebUI run or a private native interaction. Progress updates and other destinations keep `final: false` (the default), so they cannot swallow a later answer. This flag does not authorize sending.
 
 Gateway replies respect the server or interaction's upload limit. The REST tool uses a conservative 10 MiB limit. If uploads are denied or too large, generated text falls back to length-bounded messages with closed/reopened fences. Explicit files are never converted or silently discarded: failed uploads are reported in Discord and to the agent. Network/server errors are not retried as text because delivery may already have occurred. Output mentions are suppressed, and native `/a0` output remains private.
 

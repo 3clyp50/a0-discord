@@ -60,6 +60,9 @@ async def main():
             assert not bot._has_tool_access("456", "101", 789)
             bot.bot_id = saved_id
             await bot.on_message(message)
+            full.assert_not_awaited(), "Approval must not replay the earlier request"
+            message.id += 1
+            await bot.on_message(message)
             full.assert_awaited_once()
             expires = granted["access"][0]["expires_at"]
             with patch.object(bridge.time, "time", return_value=expires + 1):
@@ -95,6 +98,7 @@ async def main():
                 with patch.object(permanent_restart, "_get_config", return_value=config):
                     assert permanent_restart._has_tool_access("456", "101", 789)
                     message.content = "<@123> !bridge-status"
+                    message.id += 1
                     await bot.on_message(message)
                     assert "until revoked" in channel.send.call_args.args[0]
                     # A full request list must not evict a permanent approval.
@@ -116,11 +120,13 @@ async def main():
             assert "Web UI approval" in channel.send.call_args.args[0]
             full.assert_not_awaited()
             message.content = "<@123> !bridge-status"
+            message.id += 1
             await bot.on_message(message)
             assert "Read-only" in channel.send.call_args.args[0] and "!auth" not in channel.send.call_args.args[0]
             assert not hasattr(bot, "_is_elevated") and not hasattr(bot, "_elevated_sessions")
             # Old key commands have no authentication handler and never expose their payload.
             message.content = "<@123> !auth must-not-enter-the-model"
+            message.id += 1
             before = restricted.await_count
             await bot.on_message(message)
             assert restricted.await_count == before

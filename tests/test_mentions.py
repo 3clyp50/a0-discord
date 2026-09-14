@@ -67,7 +67,7 @@ async def main():
             assert "## Developer" in system and '"model":' in system and '"preset": "Default"' in system
             assert config["chat_bridge"]["instructions"] in system
             assert "only discord_read executes" in system
-            assert "default <=120 words" in system
+            assert "keep replies short and natural" in system
             assert "separate observed facts reported claims and hypotheses" in system
             assert "investigation != publication deployment merge" in system
             assert "verify action results/IDs before claiming done" in system
