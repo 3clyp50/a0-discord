@@ -1,10 +1,12 @@
 """Offline: /opt/venv-a0/bin/python -m usr.plugins.discord.tests.test_skill_workflows."""
 import asyncio
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from usr.plugins.discord.helpers import skill_workflows as workflows
+from usr.plugins.discord import hooks
 from usr.plugins.discord.tools.discord_read import DiscordRead
 
 
@@ -51,7 +53,23 @@ async def main():
         config["servers"] = ["999999999999999999"]
         assert "allowed" in (await reader.execute()).message
         assert client.get_guild_members.await_count == 1
-    print("PASS: two-tool baseline, skill gating, legacy policy, member reads and scheduler input")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        source = root / "plugin" / "skills" / "discord-chat"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("Current Discord skill")
+        retired = root / "a0" / "usr" / "skills" / "discord-testing"
+        retired.mkdir(parents=True)
+        (retired / "SKILL.md").write_text("Retired testing skill")
+        custom = retired.parent / "custom-skill"
+        custom.mkdir()
+        with patch.object(hooks, "_get_plugin_dir", return_value=root / "plugin"), \
+             patch.object(hooks, "_get_a0_root", return_value=root / "a0"):
+            hooks._sync_skills()
+        assert not retired.exists(), "Updates must remove the retired plugin-owned testing skill"
+        assert custom.is_dir(), "Unrelated user skills must survive migration"
+        assert (custom.parent / "discord-chat" / "SKILL.md").read_text() == "Current Discord skill"
+    print("PASS: two-tool baseline, skill gating, policy, reads, scheduler input and retired-skill cleanup")
 
 
 if __name__ == "__main__":

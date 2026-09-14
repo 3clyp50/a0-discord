@@ -39,6 +39,10 @@ def _sync_skills():
     import shutil
     source = _get_plugin_dir() / "skills"
     destination = _get_a0_root() / "usr" / "skills"
+    # Verification now belongs to core guidance and per-bot instructions.
+    retired = destination / "discord-testing"
+    if retired.exists():
+        shutil.rmtree(retired)
     for skill_dir in source.iterdir():
         if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
             shutil.copytree(skill_dir, destination / skill_dir.name, dirs_exist_ok=True,
