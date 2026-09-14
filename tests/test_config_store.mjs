@@ -22,6 +22,7 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
             calls.push({ url, ...input });
             if (url === "agents") return { data: [] };
             if (input.action === "status") return pendingStatus || { ok: true, bots: runtime };
+            if (["approve", "revoke"].includes(input.action)) return { ok: true, access: [] };
             return { ok: true, running: input.action !== "stop", status: input.action === "stop" ? "stopped" : "connecting" };
         },
     };
@@ -53,7 +54,22 @@ test("bot controls use saved IDs, preserve drafts, reject scoped actions and sto
         [["stop", "first"], ["start", "second"], ["restart", "second"]]);
     assert.equal(JSON.stringify(calls).includes("secret-"), false);
 
+    const request = { request_id: "789:456:101", eligible: true };
+    await store.accessAction(second, request, "approve", 3600);
+    assert.deepEqual(calls.at(-1), { url: "/plugins/discord/discord_bridge_api", action: "approve", bot_id: "second", request_id: request.request_id, duration: 3600 });
+    await store.accessAction(second, request, "approve", 0);
+    assert.equal(calls.at(-1).duration, 0, "Until revoked must not become the default duration");
+    const accessCalls = calls.length;
+    context.projectName = "scoped";
+    await store.accessAction(second, request, "approve");
+    assert.equal(calls.length, accessCalls);
+    context.projectName = "";
     second.token = "unsaved-token";
+    await store.accessAction(second, request, "approve");
+    assert.equal(calls.length, accessCalls);
+    await store.accessAction(second, request, "revoke");
+    assert.equal(calls.at(-1).action, "revoke");
+    assert.equal(JSON.stringify(config).includes("auth_key"), false);
     context.addDiscordBot();
     const count = calls.length;
     await store.action(second, "restart");

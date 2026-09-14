@@ -45,7 +45,7 @@ For each Discord bot:
 
 1. Create a separate application and bot in the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Enable Message Content Intent; enable Server Members Intent if member-list operations are needed.
-3. Invite the bot with View Channels, Read Message History and Send Messages. Add Add Reactions for reactions and Manage Messages for deleting authentication commands.
+3. Invite the bot with View Channels, Read Message History and Send Messages. Add Add Reactions for reactions.
 4. Open plugin **Config**, add an entry, and enter its token. Choose a label, preset, agent profile, server/user allowlists and auto-start behavior.
 5. Save, then reopen **Config**. Each bot row has a Start/Stop toggle and a Restart icon, live status and tooltips. The toggle shows a stop square while running and a play icon while stopped. New or edited bots must be saved before starting or restarting; Stop remains available for running bots.
 
@@ -57,19 +57,19 @@ Legacy single-bot configuration migrates on Config Save. An explicit empty `bots
 
 ## Discord chat bridge
 
-Mention a bot or reply to its message to create or continue a saved chat. Register a channel only for replies to every message. Bots in the same channel have independent chats, authentication sessions and rate limits.
+Mention a bot or reply to its message to create or continue a saved chat. Register a channel only for replies to every message. Bots in the same channel have independent chats, access approvals and rate limits.
 
 The read-only bridge has its own dedicated `discord_read` interface, not the two general Agent Zero tools. It includes recent channel context, real runtime model/profile metadata, and permission-scoped server/thread reading. Server-wide search runs bounded concurrent channel pages inside the plugin, with compact coverage and resumable cursors. Keyword alternatives, quoted phrases and GitHub PR-link filters help find related discussion across authors. Exact evidence is briefly cached with permission checks. The budget remains 24 remote reads per response.
 
-See [Chat Bridge Guide](docs/CHAT_BRIDGE.md) for dates, coverage, authentication and limits. The focused `search` action belongs to the bridge reader; do not invent that action for the normal Agent Zero `discord_read` tool.
+See [Chat Bridge Guide](docs/CHAT_BRIDGE.md) for dates, coverage, access approvals and limits. The focused `search` action belongs to the bridge reader; do not invent that action for the normal Agent Zero `discord_read` tool.
 
 ## Security
 
 - External message text, usernames, embeds, images and attachments are untrusted data, not instructions or authorization.
 - Read-only bridge access requires both bot and requesting member to see the channel and read its history, within configured server/user allowlists. Private threads additionally require membership unless the member can manage threads. The bridge never falls back to a user token.
 - The normal agent tools and skill workflows run with the trusted Agent Zero operator's privileges and configured accounts. They are not a replacement for the stricter Discord member-scoped reader.
-- Elevated Discord access is off by default. Enabling it allows authenticated users full Agent Zero capabilities, including local files, code execution and external writes. Use a private server, an explicit trusted-user allowlist and short session timeouts.
-- Runtime `!auth <key>` authentication is required after operator opt-in. Protect the key; deleting an authentication message requires Manage Messages. Never send it in a public channel. `!deauth` ends the session. Loading a skill does not establish authentication.
+- Full Discord agent access requires an explicit Web UI approval for the exact bot, server, user and channel. It grants tools, local files, code execution and external writes. Approve only trusted users and keep server/user allowlists narrow.
+- Approve and revoke access in Config > Agent access. Choose 1 hour (default), 8 hours, 24 hours, or Until revoked for permanent access. All approvals survive restarts; permanent approvals have no automatic expiry. No key is sent through Discord. Revoking blocks new requests, not a task already running. Loading a skill never grants approval.
 - Tool-policy blocks are retained for the former names (`plugin:discord:discord_poll`, etc.). Allowing `discord_send` alone does not override a blocked workflow backend.
 - Credentials and runtime files under `config.json` and `data/` are not distribution assets. Do not overwrite them during deployment.
 

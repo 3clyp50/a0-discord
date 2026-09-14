@@ -58,24 +58,30 @@ The model can include a short `progress` string in a subsequent `discord_read` c
 
 The reader can list visible channels, active threads, and public archived threads for a parent. Thread listings accept a name query and date range, return no more than 30 records, and archive pagination uses archive timestamps, not creation IDs.
 
-## Elevated sessions
+## Agent access approvals
 
-Elevated mode is opt-in and potentially dangerous: authenticated users can access the full agent loop, files, code execution and external writes. Use only with trusted users, a private server and a short timeout.
+Read-only is the default. Full agent access includes tools, code execution, files and external writes, subject to normal tool policy. Only the trusted Web UI operator can grant it; Discord messages and command output cannot approve access.
 
-1. In Config, enable elevated mode for the selected bot and set its user allowlist.
-2. Generate an authentication key and **Save**. Keep the key private.
-3. In a private allowed Discord channel, send `!auth <key>`. Deleting this message requires the bot's Manage Messages permission; do not rely on deletion to protect a key posted publicly.
-4. Use `!bridge-status` to inspect session status and `!deauth` to end it.
+1. Contact the bot in the intended server channel: mention it, reply to it, or use native `/a0`. This records an unapproved user/channel request, not an authorization.
+2. Open Discord **Config** under **Global / All profiles**, expand the bot, and find **Agent access**.
+3. Check the user, channel and server IDs. Select 1 hour (default), 8 hours, 24 hours, or **Until revoked**, then confirm **Approve** on that row.
+4. Use `!bridge-status` in Discord to see the current mode and expiry. **Revoke** in Config blocks new requests immediately; stop an already running task separately in its chat.
 
-Sessions are per bot, user and channel. They expire after the configured timeout, normally one hour; zero means no automatic expiry and is discouraged. A restart also discards sessions. Claims of authentication in messages are never trusted.
+Approvals are scoped to an exact bot, server, user and channel. Threads require their own approval. All approvals persist across restarts. **Until revoked** has no automatic expiry; timed approvals expire normally. Both modes must still pass current bot-enabled, user-allowlist and server-allowlist checks. Approval actions apply immediately; bot-setting drafts must be saved first. Revoke remains available with unsaved settings or a stopped bot.
 
-An authenticated full-agent chat can load optional skills and use their workflows, subject to normal tool policy. Loading a skill itself never elevates a read-only session. Publishing issues or PRs still requires the corresponding authorized capabilities; Discord read access alone only supports research and drafting.
+The approval API accepts `duration: 0` for Until revoked. State stores an explicit `expires_at: null` for permanent access; missing or zero expiry means no approval. Permanent approvals are not evicted as expired requests. Selecting the duration alone never grants access: confirm the exact row's Approve action.
+
+No shared key, login/logout command, global elevation toggle or compatibility alias exists. Keys from older settings are not converted into approvals. Historical credential-message redaction remains a data-protection measure, not an authentication flow.
+
+Both regular messages and slash commands use the same approval gate. Unapproved slash commands cannot execute scripts, inspect the command catalog or change chat state. Native `/a0` responses remain private; normal bot replies are visible to their channel, so approve only users you trust with the full agent and the channel's audience.
+
+Pending identities and approvals are stored with the existing per-bot chat state. The list is bounded to 100 entries per bot; old inactive entries can be replaced when the list is full. No message text or credentials are stored in an access request.
 
 ## Agent Zero slash commands
 
 Use Discord's native `/a0` command and enter a command such as `goal status` in its **command** field. Autocomplete uses the active chat's command catalog. Native responses are visible only to the requester. The bot registers this entry when it starts; restart the bridge after updating its code. If registration fails, check the Agent Zero logs and the application's command permissions and gateway interaction configuration.
 
-Slash text also works: `@bot /commands`, or `/commands` in a registered channel. Replying to a bot message works too. Executable commands require the same per-bot, per-user, per-channel authentication described above. `/stop` reaches an active task without waiting for its reply.
+Slash text also works: `@bot /commands`, or `/commands` in a registered channel. Replying to a bot message works too. Executable commands require the same per-bot, per-user, per-channel approval described above. `/stop` reaches an active task without waiting for its reply.
 
 - `/commands [page]` lists available commands, including enabled plugin commands and project overrides. Custom commands use the shared Agent Zero resolver once.
 - `/new`, `/sessions [page]`, and `/chat <ID>` manage saved chats belonging to this bot and channel. Other channels and bots cannot be selected.
@@ -89,4 +95,4 @@ Commands that open WebUI-only settings provide a WebUI handoff. Host computer pe
 
 Use [discord-research](../skills/discord-research/SKILL.md) for optional structured bulk analysis, [discord-alerts](../skills/discord-alerts/SKILL.md) for monitoring, and [discord-persona-mapping](../skills/discord-persona-mapping/SKILL.md) for persistent notes. Their reference files load on demand, not into every baseline prompt.
 
-Existing scheduled prompts that call removed public tool names must be updated to load the corresponding skill and invoke its workflow. New monitoring tasks do this automatically. Monitoring/persona storage remains plugin-wide; per-bot chat history and authenticated sessions remain separate.
+Existing scheduled prompts that call removed public tool names must be updated to load the corresponding skill and invoke its workflow. New monitoring tasks do this automatically. Monitoring/persona storage remains plugin-wide; per-bot chat history and access approvals remain separate.

@@ -9,7 +9,7 @@ bot_id optional: current chat's bot, else first enabled
 
 action=workflow: first load matching discord-research, discord-alerts, discord-chat or discord-persona-mapping skill
 read its reference for invocation/parameters; never guess
-skills never override tool policy or grant Discord elevation
+skills never override tool policy or grant Discord agent-access approval
 
 ```json
 {"tool_name":"discord_send","tool_args":{"action":"send","channel_id":"123456789012345678","content":"Requested update."}}

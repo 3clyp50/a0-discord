@@ -1,7 +1,6 @@
 """Run with framework Python: -m usr.plugins.discord.tests.test_slash_commands."""
 import asyncio
 import tempfile
-import time
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,7 @@ async def main():
     bot = bridge.ChatBridgeBot('test-token', 'support')
     bot._connection.user = SimpleNamespace(id=123)
     config = {'bot': {'enabled': True}, 'servers': [789], 'chat_bridge': {
-        'allowed_users': [456], 'allow_elevated': True, 'default_agent_profile': 'developer'}}
+        'allowed_users': [456], 'default_agent_profile': 'developer'}}
     channel = SimpleNamespace(id=101, name='slash-test', typing=nullcontext, send=AsyncMock())
     message = SimpleNamespace(id=1, content='<@123> /goal status', channel=channel,
         guild=SimpleNamespace(id=789), reference=None, attachments=[],
@@ -30,13 +29,13 @@ async def main():
              patch.object(persist_chat, 'CHATS_FOLDER', tmp), \
              patch.object(bot, '_get_config', return_value=config), \
              patch.object(bot, '_get_agent_response', new_callable=AsyncMock) as restricted, \
-             patch.object(bot, '_get_elevated_response', new_callable=AsyncMock, return_value='done') as agent:
+             patch.object(bot, '_get_full_agent_response', new_callable=AsyncMock, return_value='done') as agent:
             # Even native commands and custom scripts must pass existing access checks.
             with patch.object(commands, 'resolve_command_invocation', new_callable=AsyncMock) as resolve:
                 await bot.on_message(message)
                 resolve.assert_not_awaited()
-                assert 'authenticated' in channel.send.call_args.args[0]
-                bot._elevated_sessions['456:101'] = {'at': time.monotonic(), 'name': 'Tester'}
+                assert 'Web UI approval' in channel.send.call_args.args[0]
+                bridge.set_access_approval('support', '789:456:101', 'approve', config, duration=0)
                 message.author.id = 999
                 message.id += 1
                 await bot.on_message(message, command_invocation=True)
@@ -107,7 +106,7 @@ async def main():
             with patch.object(AgentContext, 'communicate', return_value=task) as communicate, \
                  patch('helpers.message_queue.log_user_message'):
                 raw = '/goal create ' + ('long prompt ' * 1000) + '\n/status'
-                await bridge.ChatBridgeBot._get_elevated_response(bot, '101', raw, message,
+                await bridge.ChatBridgeBot._get_full_agent_response(bot, '101', raw, message,
                                                                 resolved_command=True, context=ctx)
                 forwarded = communicate.call_args.args[0].message
                 assert raw in forwarded
@@ -157,7 +156,7 @@ async def main():
         for context in AgentContext.all():
             if context.id not in existing:
                 AgentContext.remove(context.id)
-    print('PASS: Discord commands, auth, stop, overrides, deduplication, session isolation, effects and native autocomplete')
+    print('PASS: Discord commands, approval, stop, overrides, deduplication, session isolation, effects and native autocomplete')
 
 
 if __name__ == '__main__':

@@ -88,7 +88,6 @@ Still on the Bot tab, scroll down to **Privileged Gateway Intents** and enable:
 | Read Message History | Read past messages via `discord_read` |
 | Add Reactions | Add reactions via `discord_send` |
 | Embed Links | Rich embeds in bot messages |
-| Manage Messages | Auto-delete `!auth` commands in chat bridge (security) |
 
 ### 5. Invite the Bot to Your Server
 
@@ -156,7 +155,7 @@ https://discord.com/channels/SERVER_ID/CHANNEL_ID
 | User Token (optional) | Browser DevTools > Network > Authorization header | Settings > **User Token** |
 | Server IDs | Right-click server > Copy Server ID | Settings > **Allowed Server IDs** |
 | Chat Bridge User Allowlist | Right-click user > Copy User ID | Settings > Chat Bridge > **User Allowlist** |
-| Elevated Mode Auth Key | Auto-generated when elevated mode enabled | Settings > Elevated Mode > **Auth Key** |
+| Agent access approval | User/channel request recorded when the bot is contacted | Config > **Agent access** |
 
 ## Verifying Installation
 
@@ -183,17 +182,11 @@ The token can also be set via the `DISCORD_BOT_TOKEN` environment variable, whic
 
 When configured, the user token is used only for read operations (`discord_read`). It authenticates against the same REST API but as a user account rather than a bot. Write operations are never routed through the user token — the plugin enforces this at the client layer regardless of the `user.read_only` config flag.
 
-### Chat Bridge Authentication
+### Chat Bridge Access
 
-The chat bridge has a separate two-tier authentication system:
+The User Allowlist controls who can contact the bot. Full agent tools require a separate Web UI approval for the exact bot, server, user and channel.
 
-1. **User Allowlist** — Only listed Discord user IDs can interact with the bot (empty = allow all server members)
-2. **Elevated Mode Auth Key** — Users send `!auth <key>` in a bridge channel to unlock full agent access
-   - Key is auto-generated (cryptographic random) or can be set manually
-   - `!auth` messages are auto-deleted by the bot (requires Manage Messages permission)
-   - Brute-force protection: 5 failed attempts per 5-minute window per user
-   - Sessions expire after the configured timeout (default: 1 hour)
-   - Users deauthenticate with `!deauth` (also accepts `!dauth`, `!unauth`, `!logout`, `!logoff`)
+Contact the bot once, then open Config > Agent access under Global / All profiles. Approve the matching identity for 1 hour (default), 8 hours, 24 hours, or Until revoked. Approvals survive restarts and never bypass saved allowlists; Until revoked has no automatic expiry. Messages and slash commands share the same gate. See [the bridge guide](CHAT_BRIDGE.md#agent-access-approvals).
 
 ## Rate Limits
 
@@ -211,7 +204,6 @@ The plugin handles `429 Too Many Requests` responses from Discord by reporting t
 
 The chat bridge enforces its own limits:
 - **Message rate limit:** 10 messages per 60-second sliding window per user
-- **Auth failure rate limit:** 5 failed attempts per 5-minute window per user
 
 ## Troubleshooting
 
@@ -224,7 +216,7 @@ The chat bridge enforces its own limits:
 | API returns 404 | Files must be in `/a0/` (not just `/git/agent-zero/`). Re-run the installer or copy manually. |
 | "Bot token not configured" | Enter token in plugin settings and click Save, or set `DISCORD_BOT_TOKEN` env var |
 | "Discord API error 401" | Token is invalid — regenerate in Developer Portal > Bot > Reset Token |
-| "Discord API error 403" | Bot lacks required permissions. Re-invite with correct permissions (View Channels, Send Messages, Read Message History, Add Reactions, Embed Links, Manage Messages) |
+| "Discord API error 403" | Bot lacks required permissions. Re-invite with correct permissions (View Channels, Send Messages, Read Message History, Add Reactions, Embed Links) |
 | Test shows "API unavailable" | Ensure `run_ui` is running: `supervisorctl status run_ui` |
 | Chat bridge not responding | Check User Allowlist (if configured); ensure Message Content Intent is enabled in Developer Portal |
 | Bridge "Already connected" error | Only one bridge instance can run per bot token — stop the existing bridge first |

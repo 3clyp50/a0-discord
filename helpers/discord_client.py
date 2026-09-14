@@ -3,13 +3,9 @@ import aiohttp
 import os
 import time
 from copy import deepcopy
-from pathlib import Path
-import json
-import threading
 from typing import Optional
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
-_config_lock = threading.RLock()
 
 
 def get_bot_configs(config):
@@ -22,22 +18,6 @@ def get_bot_configs(config):
         "servers": config.get("servers", []),
         "chat_bridge": config.get("chat_bridge", {}),
     }]
-
-
-def persist_auth_key(key, bot_id="default"):
-    """Update only the selected bot's key, preserving other settings."""
-    from usr.plugins.discord.helpers.sanitize import secure_write_json
-    path = Path(__file__).resolve().parent.parent / "config.json"
-    with _config_lock:
-        settings = json.loads(path.read_text()) if path.exists() else {}
-        if settings.get("bots") is None and bot_id == "default":
-            target = settings
-        else:
-            target = next((bot for bot in settings.get("bots", []) if bot["id"] == bot_id), None)
-            if target is None:
-                raise ValueError("Save this bot before generating a persistent auth key.")
-        target.setdefault("chat_bridge", {})["auth_key"] = key
-        secure_write_json(path, settings)
 
 
 def resolve_agent_profile(value, project_name=None):

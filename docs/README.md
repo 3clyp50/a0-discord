@@ -191,9 +191,6 @@ Configuration is stored in `usr/plugins/discord/config.json`. Defaults come from
 | `polling.auto_analyze_images` | bool | `true` | Analyze images in polled alerts |
 | `chat_bridge.auto_start` | bool | `false` | Auto-start chat bridge on agent init |
 | `chat_bridge.allowed_users` | list | `[]` | Discord user IDs allowed to interact with the bridge. Empty = allow all. |
-| `chat_bridge.allow_elevated` | bool | `false` | Allow authenticated users to access full agent loop via `!auth` |
-| `chat_bridge.auth_key` | string | `""` | Auth key for elevated mode. Auto-generated on first use if empty. |
-| `chat_bridge.session_timeout` | int | `3600` | Elevated session timeout in seconds (0 = never expire) |
 
 ### Token Modes
 
@@ -526,13 +523,7 @@ The chat bridge includes multiple security layers. See [CHAT_BRIDGE.md -- Securi
 ```
 Unlisted users are silently ignored. Changes take effect immediately without restarting the bridge.
 
-**Elevated Mode** -- Optional full Agent Zero access from Discord. Disabled by default. Requires:
-1. `allow_elevated: true` in config
-2. A configured User Allowlist (strongly recommended)
-3. A private Discord server with only trusted members
-4. Runtime authentication via `!auth <key>` in Discord
-
-Read the [main README security section](../README.md#elevated-mode----important) before enabling.
+**Agent access approvals** -- Contact the bot, then approve the exact bot/server/user/channel in Config > Agent access under Global / All profiles. Choose 1 hour (default), 8 hours, 24 hours, or Until revoked for permanent access. All approvals survive restarts and still require the existing server/user allowlists. Revoke blocks new requests; stop active tasks separately. Messages and slash commands share this gate. See [the bridge guide](CHAT_BRIDGE.md#agent-access-approvals).
 
 ### How It Works
 

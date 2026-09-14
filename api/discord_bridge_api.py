@@ -14,7 +14,9 @@ class DiscordBridgeApi(ApiHandler):
 
     async def process(self, input: dict, request: Request) -> dict | Response:
         from usr.plugins.discord.helpers.discord_client import get_discord_config
-        from usr.plugins.discord.helpers.discord_bot import get_bot_status, start_chat_bridge, stop_chat_bridge
+        from usr.plugins.discord.helpers.discord_bot import (
+            get_bot_status, start_chat_bridge, stop_chat_bridge, list_access_requests, set_access_approval,
+        )
 
         try:
             action = input.get("action", "status")
@@ -31,8 +33,14 @@ class DiscordBridgeApi(ApiHandler):
                         "auto_start": bridge.get("auto_start", False),
                         "preset": bridge.get("default_preset", ""),
                         "profile": bridge.get("default_agent_profile", ""),
+                        "access": list_access_requests(bot["id"], {"bot": bot, "servers": bot.get("servers", []), "chat_bridge": bridge}),
                     })
                 return {"ok": True, **get_bot_status(bot_id), "bots": bots}
+            if action in ("approve", "revoke"):
+                if not input.get("bot_id"):
+                    raise ValueError("Choose a saved bot for access approvals.")
+                access = set_access_approval(bot_id, input.get("request_id"), action, config, input.get("duration", 3600))
+                return {"ok": True, "access": access}
             if action not in ("start", "stop", "restart"):
                 return {"ok": False, "error": "Unknown bridge action."}
             if action != "stop":

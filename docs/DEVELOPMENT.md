@@ -41,8 +41,7 @@ a0-discord/
 │   └── discord-chat/SKILL.md
 ├── api/
 │   ├── discord_test.py          # Connection test endpoint
-│   ├── discord_config_api.py    # Custom actions (auth key generation)
-│   └── discord_bridge_api.py    # Chat bridge start/stop/status
+│   └── discord_bridge_api.py    # Bridge controls and Web UI access approvals
 ├── webui/
 │   ├── discord-store.js     # Per-bot status, controls and configuration state
 │   └── config.html          # Settings (Alpine.js x-model bindings)
@@ -131,6 +130,20 @@ The settings panel uses Agent Zero's standard Alpine.js `x-model` bindings. The 
 ```
 
 CSS classes provided by the framework: `field`, `field-label`, `field-title`, `field-description`, `field-control`, `section-title`, `section-description`, `toggle`, `toggler`.
+
+### Agent access approvals
+
+The existing per-bot chat state owns bounded observed user/channel requests and
+timed or permanent approvals. Only authenticated, CSRF-protected Web UI approve/revoke
+actions can change a grant; config saves and Discord commands cannot grant it.
+Both message dispatch and native/slash commands use `_has_tool_access`, with
+fresh enabled/allowlist checks and a final check before full-agent dispatch.
+Duration 0 stores explicit null expiry for permanent access; missing/zero expiry
+is unapproved. `_approval_active` owns liveness for dispatch, status and pruning.
+Approvals survive restart until expiry or revocation; revocation blocks new requests, not
+already-running tasks. Config controls require Global / All profiles.
+Run `test_access_approvals`, `test_slash_commands`, `test_mentions` and the
+Node `test_config_store.mjs` check in the framework runtime.
 
 ### Bot controls in Config
 

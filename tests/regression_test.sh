@@ -257,13 +257,13 @@ else
     fail "T4.4 Bridge API status" "Response: $RESPONSE"
 fi
 
-# T4.5: Config API — generate auth key
-RESPONSE=$(api "discord_config_api" '{"action":"generate_auth_key"}')
-HAS_KEY=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if len(d.get('auth_key','')) > 10 else 'no')" 2>/dev/null)
-if [ "$HAS_KEY" = "yes" ]; then
-    pass "T4.5 Config API generates auth key"
+# T4.5: Access approvals reject missing explicit bot identity
+RESPONSE=$(api "discord_bridge_api" '{"action":"approve","request_id":"missing"}')
+OK=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null)
+if [ "$OK" = "False" ]; then
+    pass "T4.5 Access approval rejects an unspecified bot"
 else
-    fail "T4.5 Config API auth key generation" "Response: $RESPONSE"
+    fail "T4.5 Access approval validation" "Response: $RESPONSE"
 fi
 
 # ============================================================
@@ -482,12 +482,12 @@ else
     fail "T9.2 WebUI config page" "config.html not found"
 fi
 
-# T9.3: Config page has elevated mode warning
-HAS_WARNING=$(docker exec "$CONTAINER" grep -c "Elevated mode grants Discord users" /a0/usr/plugins/discord/webui/config.html 2>/dev/null)
+# T9.3: Config page explains the full-access boundary
+HAS_WARNING=$(docker exec "$CONTAINER" rg -c "Full agent access includes tools" /a0/usr/plugins/discord/webui/config.html 2>/dev/null)
 if [ "$HAS_WARNING" -gt 0 ]; then
-    pass "T9.3 Config page includes elevated mode security warning"
+    pass "T9.3 Config page includes the agent-access warning"
 else
-    fail "T9.3 Elevated mode warning" "Not found in config.html"
+    fail "T9.3 Agent access warning" "Not found in config.html"
 fi
 
 # ============================================================
@@ -553,18 +553,15 @@ else
     fail "T11.1 Restricted mode prompt" "$RESULT"
 fi
 
-# T11.2: Auth key generation produces secure tokens
+# T11.2: Approval management retains Web UI authentication and CSRF
 RESULT=$(container_python "
-from usr.plugins.discord.helpers.sanitize import generate_auth_key
-keys = [generate_auth_key() for _ in range(3)]
-unique = len(set(keys)) == 3
-long_enough = all(len(k) >= 32 for k in keys)
-print('ok' if unique and long_enough else f'fail: unique={unique}, lengths={[len(k) for k in keys]}')
+from usr.plugins.discord.api.discord_bridge_api import DiscordBridgeApi
+print('ok' if DiscordBridgeApi.requires_auth() and DiscordBridgeApi.requires_csrf() else 'fail')
 ")
 if [ "$RESULT" = "ok" ]; then
-    pass "T11.2 Auth key generation (unique, >=32 chars)"
+    pass "T11.2 Approval endpoint requires authentication and CSRF"
 else
-    fail "T11.2 Auth key generation" "$RESULT"
+    fail "T11.2 Approval endpoint protection" "$RESULT"
 fi
 
 # T11.3: Secure file write function exists

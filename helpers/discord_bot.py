@@ -4,14 +4,13 @@ Listens for messages in designated channels and routes them through Agent Zero's
 SECURITY MODEL:
   - Read-only mode (default): Uses call_chat_model() with a scoped Discord reader.
     NO arbitrary tools, code execution, file access, or external writes.
-  - Elevated mode (opt-in): Authenticated users get full agent loop access via
-    context.communicate(). Requires: allow_elevated=true in config + runtime auth
-    via !auth <key> in Discord. Sessions expire after a configurable timeout.
+  - Approved agent access: The Web UI operator grants a scoped approval for
+    an exact bot, server, user and channel. Both messages and slash commands
+    enforce this approval before tools or command scripts can execute.
 """
 
 import asyncio
 import collections
-import hmac
 import hashlib
 import json
 import logging
@@ -109,12 +108,65 @@ def set_context_id(channel_id: str, context_id: str, bot_id: str = "default"):
         save_chat_state(state, bot_id)
 
 
+
+ACCESS_DURATIONS = (0, 3600, 28800, 86400)
+MAX_ACCESS_REQUESTS = 100
+
+
+def _scope_allowed(config, user_id, guild_id):
+    if not config.get("bot", {}).get("enabled", True):
+        return False
+    servers = {str(value) for value in config.get("servers", [])}
+    users = {str(value) for value in config.get("chat_bridge", {}).get("allowed_users", [])}
+    return (not servers or str(guild_id) in servers) and (not users or str(user_id) in users)
+
+
+def _approval_active(record):
+    # Missing/zero is unapproved; explicit JSON null means until revoked.
+    expires = record.get("expires_at", 0)
+    return expires is None or expires > time.time()
+
+
+def list_access_requests(bot_id, config):
+    records = load_chat_state(bot_id).get("access_requests", {})
+    result = []
+    for request_id, record in records.items():
+        eligible = _scope_allowed(config, record["user_id"], record["guild_id"])
+        expires = record.get("expires_at", 0)
+        active = _approval_active(record)
+        result.append({**record, "request_id": request_id, "eligible": eligible,
+                       "approved": eligible and active,
+                       "status": "Blocked by bot settings" if not eligible else
+                                 "Approved" if active else "Expired" if expires else "Read-only"})
+    return sorted(result, key=lambda item: item["requested_at"], reverse=True)
+
+
+def set_access_approval(bot_id, request_id, action, config, duration=3600):
+    """Web UI only: approve or revoke one previously observed Discord identity."""
+    if action not in ("approve", "revoke"):
+        raise ValueError("Unknown access action.")
+    if not isinstance(request_id, str):
+        raise ValueError("Select a user/channel request.")
+    if action == "approve" and (type(duration) is not int or duration not in ACCESS_DURATIONS):
+        raise ValueError("Choose 1, 8 or 24 hours, or 0 for until revoked.")
+    with _state_lock:
+        state = load_chat_state(bot_id)
+        record = state.get("access_requests", {}).get(request_id)
+        if record is None:
+            raise ValueError("Request not found. Contact this bot in the intended channel first.")
+        if action == "approve" and not _scope_allowed(config, record["user_id"], record["guild_id"]):
+            raise ValueError("Enable the bot and allow this server and user in saved settings first.")
+        record["expires_at"] = (None if duration == 0 else int(time.time()) + duration) if action == "approve" else 0
+        save_chat_state(state, bot_id)
+    logger.info("Discord access %s: bot=%s scope=%s", action, bot_id, request_id)
+    return list_access_requests(bot_id, config)
+
+
 class ChatBridgeBot(discord.Client):
     """Discord bot that bridges messages to Agent Zero's LLM.
 
     SECURITY: By default, only a scoped Discord reader is executable.
-    Authenticated users can optionally elevate to full agent loop
-    access if allow_elevated is enabled in the plugin config.
+    Full agent execution requires an active Web UI approval for this user/channel.
     """
 
     MAX_CHAT_MESSAGE_LENGTH = 4000
@@ -128,9 +180,6 @@ class ChatBridgeBot(discord.Client):
     # Rate limit: max messages per user within the window
     RATE_LIMIT_MAX = 10
     RATE_LIMIT_WINDOW = 60  # seconds
-    # Auth failure rate limit
-    AUTH_MAX_FAILURES = 5
-    AUTH_FAILURE_WINDOW = 300  # 5 minute lockout
 
     def __init__(self, bot_token: str, bot_id: str = "default"):
         if not bot_token or not bot_token.strip():
@@ -151,11 +200,7 @@ class ChatBridgeBot(discord.Client):
         from usr.plugins.discord.helpers.native_commands import create_tree
         self.command_tree = create_tree(self)
         self.commands_registered = False
-        # Elevated session tracking: "{user_id}:{channel_id}" -> {"at": float, "name": str}
-        self._elevated_sessions: dict[str, dict] = {}
-        # Failed auth attempt tracking: user_id -> deque of timestamps
-        self._auth_failures: dict[str, collections.deque] = {}
-        # Temp files for image attachments in elevated mode
+        # Temporary images for approved agent requests
         self._temp_files: list[str] = []
         # Threading event for signaling ready state (set by on_ready)
         self._ready_event: Optional[threading.Event] = None
@@ -239,174 +284,61 @@ class ChatBridgeBot(discord.Client):
         return context
 
     # ------------------------------------------------------------------
-    # Session management
+    # Web UI access approvals
     # ------------------------------------------------------------------
 
-    def _session_key(self, user_id: str, channel_id: str) -> str:
-        return f"{user_id}:{channel_id}"
+    def _register_access_request(self, message):
+        if message.guild is None:
+            return
+        from usr.plugins.discord.helpers.sanitize import sanitize_channel_name, sanitize_username
+        request_id = f"{message.guild.id}:{message.author.id}:{message.channel.id}"
+        with _state_lock:
+            state = load_chat_state(self.bot_id)
+            records = state.setdefault("access_requests", {})
+            if request_id in records:
+                return
+            if len(records) >= MAX_ACCESS_REQUESTS:
+                expired = [key for key, record in records.items() if not _approval_active(record)]
+                if not expired:
+                    return
+                del records[min(expired, key=lambda key: records[key]["requested_at"])]
+            records[request_id] = {
+                "guild_id": str(message.guild.id), "user_id": str(message.author.id),
+                "channel_id": str(message.channel.id),
+                "guild_name": sanitize_channel_name(getattr(message.guild, "name", str(message.guild.id))),
+                "user_name": sanitize_username(message.author.display_name),
+                "channel_name": sanitize_channel_name(getattr(message.channel, "name", str(message.channel.id))),
+                "requested_at": int(time.time()), "expires_at": 0,
+            }
+            save_chat_state(state, self.bot_id)
 
-    def _is_elevated(self, user_id: str, channel_id: str) -> bool:
-        """Check if a user has an active elevated session in this channel."""
-        config = self._get_config()
-        if not config.get("chat_bridge", {}).get("allow_elevated", False):
+    def _has_tool_access(self, user_id, channel_id, guild_id):
+        if guild_id is None or not _scope_allowed(self._get_config(), user_id, guild_id):
+            return False
+        try:
+            record = load_chat_state(self.bot_id).get("access_requests", {}).get(f"{guild_id}:{user_id}:{channel_id}", {})
+            return _approval_active(record)
+        except (OSError, ValueError, TypeError):
+            logger.exception("Discord approval state unavailable; keeping read-only access")
             return False
 
-        key = self._session_key(user_id, channel_id)
-        session = self._elevated_sessions.get(key)
-        if not session:
+    async def _handle_bridge_command(self, message):
+        text = self._strip_bot_mentions(message.content).strip()
+        if not text.startswith("!"):
             return False
-
-        timeout = config.get("chat_bridge", {}).get("session_timeout", 3600)
-        # timeout=0 means never expire
-        if timeout > 0 and time.monotonic() - session["at"] > timeout:
-            del self._elevated_sessions[key]
-            return False
-
-        return True
-
-    def _get_auth_key(self, config: dict) -> str:
-        bridge_config = config.get("chat_bridge", {})
-        key = bridge_config.get("auth_key", "")
-        if not key and bridge_config.get("allow_elevated", False):
-            from usr.plugins.discord.helpers.discord_client import persist_auth_key
-            from usr.plugins.discord.helpers.sanitize import generate_auth_key
-            try:
-                key = generate_auth_key()
-                persist_auth_key(key, self.bot_id)
-            except Exception:
-                logger.exception("Could not persist Discord auth key for bot %s", self.bot_id)
-                return ""
-        return key
-
-    # ------------------------------------------------------------------
-    # Auth command handling
-    # ------------------------------------------------------------------
-
-    async def _handle_auth_command(self, message: discord.Message, channel_id: str) -> bool:
-        """Handle !auth, !deauth, and !bridge-status commands.
-
-        Returns True if the message was an auth command (consumed), False otherwise.
-        """
-        text = self._strip_bot_mentions(message.content)
-        user_id = str(message.author.id)
-
-        # --- !deauth (accept common typos/aliases) ---
-        if text.lower() in ("!deauth", "!dauth", "!unauth", "!logout", "!logoff"):
-            key = self._session_key(user_id, channel_id)
-            if key in self._elevated_sessions:
-                del self._elevated_sessions[key]
-                from agent import AgentContext
-                context = AgentContext.get(get_context_id(channel_id, self.bot_id) or "")
-                if context:
-                    context.set_data("discord_bridge_history", [])
-                await message.channel.send("Session ended. Back to read-only mode.")
-                logger.info(f"Elevated session ended: user={user_id} channel={channel_id}")
-            else:
-                await message.channel.send("No active elevated session.")
-            return True
-
-        # --- !bridge-status ---
         if text.lower() == "!bridge-status":
-            if self._is_elevated(user_id, channel_id):
-                session = self._elevated_sessions[self._session_key(user_id, channel_id)]
-                elapsed = int(time.monotonic() - session["at"])
-                config = self._get_config()
-                timeout = config.get("chat_bridge", {}).get("session_timeout", 3600)
-                if timeout > 0:
-                    remaining = max(0, timeout - elapsed)
-                    expire_info = f"Session expires in {remaining // 3600}h {(remaining % 3600) // 60}m"
-                else:
-                    expire_info = "Session does not expire"
-                await message.channel.send(
-                    f"Mode: **Elevated** (full agent access)\n"
-                    f"{expire_info}. Use `!deauth` to end."
-                )
+            guild_id = message.guild.id if message.guild else None
+            if self._has_tool_access(str(message.author.id), str(message.channel.id), guild_id):
+                record = load_chat_state(self.bot_id)["access_requests"][f"{guild_id}:{message.author.id}:{message.channel.id}"]
+                expiry = "lasts until revoked" if record["expires_at"] is None else f"expires <t:{record['expires_at']}:R>"
+                response = f"Mode: **Full agent access**. Web UI approval {expiry}."
             else:
-                config = self._get_config()
-                elevated_available = config.get("chat_bridge", {}).get("allow_elevated", False)
-                if elevated_available:
-                    await message.channel.send(
-                        "Mode: **Read-only** (Discord history access). Use `!auth <key>` to elevate."
-                    )
-                else:
-                    await message.channel.send(
-                        "Mode: **Read-only** (Discord history access). Elevated mode is not enabled."
-                    )
-            return True
-
-        # --- !auth <key> ---
-        if text.lower().startswith("!auth"):
-            # Try to delete the message immediately to protect the key
-            try:
-                await message.delete()
-            except (discord.Forbidden, discord.HTTPException):
-                # Bot may not have Manage Messages permission
-                logger.warning("Could not delete !auth message — bot lacks Manage Messages permission")
-
-            config = self._get_config()
-            if not config.get("chat_bridge", {}).get("allow_elevated", False):
-                await message.channel.send("Elevated mode is not enabled in the configuration.")
-                return True
-
-            auth_key = self._get_auth_key(config)
-            if not auth_key:
-                await message.channel.send(
-                    "Elevated mode is enabled but no auth key could be generated. "
-                    "Check plugin configuration."
-                )
-                return True
-
-            # Check auth failure rate limit
-            now = time.monotonic()
-            if user_id not in self._auth_failures:
-                self._auth_failures[user_id] = collections.deque()
-            failures = self._auth_failures[user_id]
-            while failures and now - failures[0] > self.AUTH_FAILURE_WINDOW:
-                failures.popleft()
-            if len(failures) >= self.AUTH_MAX_FAILURES:
-                await message.channel.send(
-                    "Too many failed attempts. Please wait before trying again."
-                )
-                return True
-
-            # Extract the key from the command
-            parts = text.split(maxsplit=1)
-            provided_key = parts[1].strip() if len(parts) > 1 else ""
-
-            # Constant-time comparison to prevent timing attacks
-            if provided_key and hmac.compare_digest(provided_key, auth_key):
-                session_key = self._session_key(user_id, channel_id)
-                self._elevated_sessions[session_key] = {
-                    "at": now,
-                    "name": message.author.display_name or message.author.name,
-                }
-                timeout = config.get("chat_bridge", {}).get("session_timeout", 3600)
-                if timeout > 0:
-                    hours = timeout // 3600
-                    mins = (timeout % 3600) // 60
-                    duration = f"{hours}h" if hours and not mins else f"{mins}m" if mins else f"{hours}h"
-                    if hours and mins:
-                        duration = f"{hours}h {mins}m"
-                    expire_msg = f"Session expires in {duration}."
-                else:
-                    expire_msg = "Session does not expire."
-                await message.channel.send(
-                    f"Elevated session active. {expire_msg} "
-                    f"You now have full Agent Zero access in this channel. "
-                    f"Use `!deauth` to end the session."
-                )
-                logger.info(f"Elevated session granted: user={user_id} channel={channel_id}")
-            else:
-                failures.append(now)
-                remaining = self.AUTH_MAX_FAILURES - len(failures)
-                await message.channel.send(
-                    f"Authentication failed. {remaining} attempt(s) remaining."
-                )
-                logger.warning(f"Failed auth attempt: user={user_id} channel={channel_id}")
-
-            return True
-
-        return False
+                response = ("Mode: **Read-only** (Discord history access). "
+                            "Ask the operator to approve this user/channel in Discord Config > Agent access.")
+        else:
+            response = "Unknown bridge command. Use !bridge-status. Agent access is approved in the Web UI, never with a Discord key."
+        await message.channel.send(response, allowed_mentions=discord.AllowedMentions.none())
+        return True
 
     # ------------------------------------------------------------------
     # Message handling
@@ -441,20 +373,7 @@ class ChatBridgeBot(discord.Client):
     def _allows_user(self, user, guild):
         if user.bot:
             return False
-        config = self._get_config()
-        if not config.get("bot", {}).get("enabled", True):
-            return False
-        allowed_servers = config.get("servers", [])
-        if allowed_servers and (
-            guild is None
-            or str(guild.id) not in [str(g) for g in allowed_servers]
-        ):
-            return False
-        allowed_users = config.get("chat_bridge", {}).get("allowed_users", [])
-        if allowed_users and str(user.id) not in [str(u) for u in allowed_users]:
-            return False
-
-        return True
+        return _scope_allowed(self._get_config(), user.id, guild.id if guild else None)
 
     async def on_message(self, message: discord.Message, *, command_invocation=False):
         # Ignore own messages and other bots
@@ -479,11 +398,9 @@ class ChatBridgeBot(discord.Client):
         if not user_text.strip():
             return
 
-        # Handle auth commands first (before rate limiting)
-        if user_text.strip().startswith("!"):
-            handled = await self._handle_auth_command(message, channel_id)
-            if handled:
-                return
+        self._register_access_request(message)
+        if await self._handle_bridge_command(message):
+            return
 
         # Enforce content length limit before any processing
         if len(user_text) > self.MAX_CHAT_MESSAGE_LENGTH:
@@ -523,10 +440,10 @@ class ChatBridgeBot(discord.Client):
                 if message_id in self._command_ids:
                     return
                 self._command_ids.append(message_id)
-            if not self._is_elevated(user_key, channel_id):
+            if not self._has_tool_access(user_key, channel_id, message.guild.id if message.guild else None):
                 await message.channel.send(
-                    'Agent Zero commands require an authenticated session in this channel. '
-                    'Use the existing !auth flow, then /commands (or /a0 command:commands).',
+                    'Agent Zero commands require Web UI approval for this user/channel. '
+                    'Ask the operator to approve the request in Discord Config > Agent access.',
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
@@ -546,12 +463,12 @@ class ChatBridgeBot(discord.Client):
         # Serialize turns so replies cannot overwrite history or become interventions.
         async with self._channel_locks.setdefault(channel_id, asyncio.Lock()), message.channel.typing():
             try:
-                if self._is_elevated(str(message.author.id), channel_id):
-                    response_text = await self._get_elevated_response(
+                if self._has_tool_access(str(message.author.id), channel_id, message.guild.id if message.guild else None):
+                    response_text = await self._get_full_agent_response(
                         channel_id, user_text, message, resolved_command=resolved_command, context=command_context
                     )
                 elif resolved_command:
-                    response_text = 'Your authenticated session expired. Authenticate again to run this command.'
+                    response_text = 'Your Web UI approval expired or was revoked. Ask the operator to approve this user/channel again.'
                 else:
                     response_text = await self._get_agent_response(
                         channel_id, user_text, message
@@ -779,15 +696,17 @@ class ChatBridgeBot(discord.Client):
         return text if len(text) <= remaining else json.dumps({"coverage": "Tool result was compacted; use its checkpoint and request an exact message if needed.", "truncated_for_model": True})
 
     # ------------------------------------------------------------------
-    # Elevated mode: full agent loop with tools (authenticated users only)
+    # Full agent loop: approved user/channel only
     # ------------------------------------------------------------------
 
-    async def _get_elevated_response(self, channel_id: str, text: str, message: discord.Message, *, resolved_command=False, context=None) -> str:
+    async def _get_full_agent_response(self, channel_id: str, text: str, message: discord.Message, *, resolved_command=False, context=None) -> str:
         """Route through the full Agent Zero agent loop (tools, code execution, etc.).
 
-        SECURITY: Only called for users who have authenticated via !auth <key>.
-        The caller (_on_message) verifies elevation status before calling this.
+        Both entry points and this final dispatch enforce the exact Web UI approval.
         """
+        guild_id = message.guild.id if message.guild else None
+        if not self._has_tool_access(str(message.author.id), channel_id, guild_id):
+            return "Web UI approval is required for full agent access in this channel."
         try:
             from agent import UserMessage
             from helpers import message_queue
@@ -804,10 +723,7 @@ class ChatBridgeBot(discord.Client):
             # input hook from interpreting either edge as another slash invocation.
             if resolved_command:
                 safe_text = f"User request:\n\n{safe_text}\n\n[End of request]"
-            # In elevated mode the user is authenticated — send their message
-            # directly as a user request through communicate(). Do NOT prefix
-            # with "[Discord Chat Bridge - …]" because that makes the infection
-            # check think an external entity is directing the agent.
+            # Approved requests enter the normal agent loop; tool policy still applies.
             prefixed_text = safe_text
 
             # Handle image attachments for the agent
@@ -826,6 +742,9 @@ class ChatBridgeBot(discord.Client):
                     except Exception:
                         pass
 
+            if not self._has_tool_access(str(message.author.id), channel_id, guild_id):
+                self._cleanup_temp_files()
+                return "Web UI approval expired or was revoked before the request could start."
             user_msg = UserMessage(message=prefixed_text, attachments=attachment_paths)
             message_queue.log_user_message(
                 context, prefixed_text, attachment_paths, source=" (Discord)"
@@ -839,9 +758,8 @@ class ChatBridgeBot(discord.Client):
             return result if isinstance(result, str) else str(result)
 
         except ImportError:
-            if resolved_command:
-                raise
-            return await self._get_agent_response_http(channel_id, text)
+            logger.exception("Approved Discord agent runtime is unavailable")
+            return "The agent runtime is unavailable. Check the Agent Zero logs."
 
     def _cleanup_temp_files(self):
         """Remove temporary image files created during message processing."""
@@ -852,50 +770,6 @@ class ChatBridgeBot(discord.Client):
             except OSError:
                 remaining.append(path)
         self._temp_files = remaining
-
-    # ------------------------------------------------------------------
-    # HTTP fallback
-    # ------------------------------------------------------------------
-
-    async def _get_agent_response_http(self, channel_id: str, text: str) -> str:
-        """Fallback: route through Agent Zero's HTTP API."""
-        import aiohttp
-        from usr.plugins.discord.helpers.discord_client import get_discord_config
-
-        config = get_discord_config()
-        api_port = config.get("chat_bridge", {}).get("api_port", 80)
-        api_key = config.get("chat_bridge", {}).get("api_key", "")
-
-        context_id = get_context_id(channel_id, self.bot_id) or ""
-        _, agent_profile = self._get_chat_bridge_defaults()
-
-        async with aiohttp.ClientSession() as session:
-            payload = {
-                "message": text,
-                "context_id": context_id,
-            }
-            headers = {"Content-Type": "application/json"}
-            if not context_id and agent_profile:
-                payload["agent_profile"] = agent_profile
-            if api_key:
-                headers["X-API-KEY"] = api_key
-
-            async with session.post(
-                f"http://localhost:{api_port}/api/api_message",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=300),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    return f"Agent API error ({resp.status}): {body}"
-                data = await resp.json()
-
-                # Store context ID for conversation continuity
-                if data.get("context_id"):
-                    set_context_id(channel_id, data["context_id"], self.bot_id)
-
-                return data.get("response", "No response from agent.")
 
     # ------------------------------------------------------------------
     # Response sending

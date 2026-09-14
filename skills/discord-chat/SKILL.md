@@ -13,6 +13,6 @@ Mentions and replies work without registering channels. Register a channel only 
 
 For agent-driven administration, read references/bridge.md with skills_tool action=read_file, skill_name=discord-chat. It documents the discord_send administration workflow. Pass the stable bot_id inside parameters to select a bot. New names retain existing chat mappings.
 
-Read-only is the default. Full agent execution requires operator opt-in plus a live !auth session. Loading this skill is not elevation and does not bypass tool policy.
+Read-only is the default. Full agent execution requires a current Web UI approval for the exact bot/server/user/channel. Contact the bot, then ask the operator to approve the row in Config > Agent access. Loading this skill grants no approval and never bypasses tool policy.
 
 Stop pauses auto-start until a manual Start or Agent Zero restart. Removing channel registration does not delete saved Agent Zero chats.

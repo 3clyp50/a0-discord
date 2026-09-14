@@ -153,86 +153,62 @@
                     </div>
                 </div>
 
-<div class="settings-advanced-section" x-data="{ advOpen: false }">
-                    <button type="button" class="settings-advanced-toggle" :aria-expanded="advOpen" @click="advOpen = !advOpen">
-                        <x-icon class="settings-advanced-toggle-icon" :style="advOpen ? 'transform:rotate(90deg)' : ''" name="chevron_right"></x-icon>
-                        <span>Advanced</span>
-                    </button>
-                    <div class="settings-advanced-body" x-show="advOpen" x-transition.opacity style="display: none;">
-                <!-- Elevated mode -->
-                <div class="section-title">Elevated Mode (2FA)</div>
-                <div class="section-description">
-                    When enabled, authenticated users can unlock full Agent Zero access from Discord using <code>!auth &lt;key&gt;</code>.
-                    Default mode is read-only (Discord channel and thread reading, no system access or external writes).
-                </div>
-
-                <div class="field">
-                    <div class="field-label">
-                        <div class="field-title">Allow elevated mode</div>
-                        <div class="field-description">Grants authenticated users full agent access including code execution, file operations, and system tools.</div>
+                <div class="discord-access" x-data="{ accessDuration: 3600 }">
+                    <div class="section-title">Agent access</div>
+                    <div class="section-description">
+                        Unapproved users have read-only Discord access. Approve an exact user and channel here to enable tools for messages and slash commands. No keys are sent through Discord.
                     </div>
-                    <div class="field-control">
-                        <label class="toggle">
-                            <input type="checkbox" x-model="bot.chat_bridge.allow_elevated" />
-                            <span class="toggler"></span>
+                    <p class="field-description">
+                        <strong>Full agent access includes tools, code execution, files and external writes.</strong>
+                        Approve only trusted users. Normal replies are visible to the channel; native /a0 replies remain private.
+                        Approvals survive restarts until expiry or revocation. Revoke blocks new requests; stop an active run separately in its chat.
+                    </p>
+                    <div class="field">
+                        <label class="field-label">
+                            <span class="field-title">Approval duration</span>
+                            <span class="field-description">Applies immediately when you approve a row. No settings Save is needed.</span>
                         </label>
+                        <div class="field-control">
+                            <select aria-label="Approval duration" x-model.number="accessDuration" :disabled="$store.discordConfig.scoped">
+                                <option :value="3600">1 hour</option>
+                                <option :value="28800">8 hours</option>
+                                <option :value="86400">24 hours</option>
+                                <option :value="0">Until revoked</option>
+                            </select>
+                        </div>
                     </div>
+                    <p class="field-description" x-show="accessDuration === 0">
+                        <strong>No automatic expiry.</strong> Access persists across restarts until you revoke it. Bot and user allowlists still apply.
+                    </p>
+                    <p class="field-description" x-show="!($store.discordConfig.runtime(bot)?.access || []).length">
+                        No requests yet. Mention this bot, reply to it, or use /a0 in the intended channel, then refresh.
+                    </p>
+                    <template x-for="request in $store.discordConfig.runtime(bot)?.access || []" :key="request.request_id">
+                        <div class="discord-access-row">
+                            <div class="discord-access-identity">
+                                <strong x-text="request.user_name + ' / #' + request.channel_name"></strong>
+                                <span class="field-description" x-text="request.guild_name + ' / User: ' + request.user_id + ' / Channel: ' + request.channel_id"></span>
+                                <span class="field-description" role="status" x-text="request.status + (request.expires_at === null ? ' / Until revoked' : request.expires_at ? ' / Until ' + new Date(request.expires_at * 1000).toLocaleString() : '')"></span>
+                            </div>
+                            <div class="discord-bot-actions">
+                                <button type="button" class="btn btn-action" :title="$store.discordConfig.accessDisabledReason(bot, 'approve') || (request.approved ? 'Renew approval' : 'Approve full agent access')"
+                                    :aria-label="(request.approved ? 'Renew approval for ' : 'Approve access for ') + request.user_name + ' in ' + request.channel_name"
+                                    :disabled="!!$store.discordConfig.accessDisabledReason(bot, 'approve') || !request.eligible"
+                                    @click="$confirmClick($event, () => $store.discordConfig.accessAction(bot, request, 'approve', accessDuration))">
+                                    <x-icon name="check"></x-icon>
+                                </button>
+                                <button type="button" class="btn btn-action" title="Revoke agent access"
+                                    :aria-label="'Revoke access for ' + request.user_name + ' in ' + request.channel_name"
+                                    :disabled="!!$store.discordConfig.accessDisabledReason(bot, 'revoke') || request.expires_at === 0"
+                                    @click="$store.discordConfig.accessAction(bot, request, 'revoke')">
+                                    <x-icon name="block"></x-icon>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
                 </div>
 
-                <template x-if="bot.chat_bridge.allow_elevated">
-                    <div>
-                        <div class="field-description">
-                            <div>Security Notice</div>
-                            <div>
-                                Elevated mode grants Discord users <strong>full access</strong> to Agent Zero's capabilities, including code execution, file operations, and system tools.
-                                Before enabling, read the security section in the plugin's <strong>README.md</strong>.
-                                <br><br>
-                                <strong>Recommended:</strong> A private server with only trusted members, a defined User Allowlist above, and short session timeouts. Only allow users you deeply trust.
-                            </div>
-                        </div>
-
-                        <div class="field">
-                            <div class="field-label">
-                                <div class="field-title">Auth Key</div>
-                                <div class="field-description">Users send <code>!auth &lt;key&gt;</code> in Discord to elevate. The message is auto-deleted. Share this key securely.</div>
-                            </div>
-                            <div class="field-control discord-key-control">
-                                <input type="password" x-model="bot.chat_bridge.auth_key" aria-label="Auth key" readonly />
-                                <button type="button" class="btn btn-action" title="Generate auth key" aria-label="Generate auth key" @click="context.generateDiscordKey(bot)"><x-icon name="key"></x-icon></button>
-                                <button type="button" class="btn btn-action" title="Copy auth key" aria-label="Copy auth key" :disabled="!bot.chat_bridge.auth_key" @click="context.copyDiscordKey(bot)"><x-icon name="content_copy"></x-icon></button>
-                            </div>
-                        </div>
-
-                        <div class="field">
-                            <div class="field-label">
-                                <div class="field-title">Session Timeout</div>
-                                <div class="field-description">How long elevated sessions last before requiring re-authentication.</div>
-                            </div>
-                            <div class="field-control">
-                                <select x-model.number="bot.chat_bridge.session_timeout"
-                                    x-init="if (bot.chat_bridge.session_timeout === undefined) bot.chat_bridge.session_timeout = 3600">
-                                    <option value="3600">1 hour</option>
-                                    <option value="7200">2 hours</option>
-                                    <option value="14400">4 hours</option>
-                                    <option value="28800">8 hours</option>
-                                    <option value="43200">12 hours</option>
-                                    <option value="86400">24 hours</option>
-                                    <option value="0">Never expire</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div x-show="bot.chat_bridge.session_timeout == 0"
-                            class="field-description">
-                            <strong>Security warning:</strong> "Never expire" means an elevated session stays active until the bot restarts or the user runs <code>!deauth</code>. If the auth key is compromised, the attacker retains full agent access indefinitely. Use with caution.
-                        </div>
-                    </div>
-                </template>
-
-
-                            <p class="field-description">Bot ID: <code x-text="bot.id"></code>. Removing a bot disconnects it after Save; saved chats are retained.</p>
-                    </div>
-                </div>
+                <p class="field-description">Bot ID: <code x-text="bot.id"></code>. Removing a bot disconnects it after Save; saved chats are retained.</p>
                         </div>
                     </section>
                 </template>
@@ -361,8 +337,9 @@
         .discord-config-heading .section-title { margin-top: 0; }
         .discord-config .field-control { min-width: 0; }
         .discord-config code { overflow-wrap: anywhere; }
-        .discord-key-control { gap: var(--spacing-xs); }
-        .discord-key-control input { flex: 1; min-width: 0; width: 0; }
+        .discord-access-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-md); padding: var(--spacing-sm) 0; border-bottom: 1px solid var(--color-border); }
+        .discord-access-identity { display: flex; flex-direction: column; gap: var(--spacing-xs); flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
+        .discord-access-identity .field-description { margin: 0; }
         .discord-config .btn-action { flex-shrink: 0; }
         .discord-add-bot { padding-top: var(--spacing-sm); }
         .discord-add-bot .field-description { margin-top: var(--spacing-sm); }

@@ -10,7 +10,7 @@ function newBot() {
         id: crypto.randomUUID(), name: "", token: "", enabled: true, servers: [],
         chat_bridge: {
             auto_start: false, default_preset: "", default_agent_profile: "",
-            allowed_users: [], allow_elevated: false, auth_key: "", session_timeout: 3600,
+            allowed_users: [],
         },
     };
 }
@@ -52,6 +52,35 @@ export const store = createStore("discordConfig", {
         if (!saved.enabled || !saved.configured) return "Save an enabled bot with a token first.";
         if (action === "start" && saved.running) return "This bot is already running.";
         return "";
+    },
+
+    accessDisabledReason(bot, action) {
+        if (action === "approve") return this.disabledReason(bot, action);
+        if (this.scoped) return "Select Global and All profiles to manage access.";
+        if (this.busy || this.busyBot) return "A Discord request is in progress.";
+        if (!this.loaded || !this.runtime(bot)) return "Refresh saved bot status first.";
+        return "";
+    },
+
+    async accessAction(bot, request, action, duration = 3600) {
+        if (!["approve", "revoke"].includes(action) || this.accessDisabledReason(bot, action)) return;
+        if (action === "approve" && !request.eligible) return;
+        const generation = this.generation;
+        this.busyBot = bot.id;
+        try {
+            const data = await callJsonApi(endpoint + "discord_bridge_api", {
+                action, bot_id: bot.id, request_id: request.request_id,
+                ...(action === "approve" ? { duration: Number(duration) } : {}),
+            });
+            if (generation !== this.generation) return;
+            if (!data.ok) throw new Error(data.error);
+            this.bots = this.bots.map(item => item.id === bot.id ? { ...item, access: data.access } : item);
+            notify("success", action === "approve" ? "Agent access approved for this user/channel." : "Agent access revoked for new requests.");
+        } catch (error) {
+            if (generation === this.generation) notify("error", error.message || "Could not update access.");
+        } finally {
+            if (generation === this.generation) this.busyBot = "";
+        }
     },
 
     statusLabel(bot) {
@@ -134,29 +163,13 @@ export const store = createStore("discordConfig", {
             config.bots = [bot];
         }
         for (const bot of config.bots) {
-            bot.chat_bridge = { ...newBot().chat_bridge, ...bot.chat_bridge };
+            const bridge = bot.chat_bridge || {};
+            bot.chat_bridge = Object.fromEntries(Object.entries(newBot().chat_bridge).map(([key, value]) => [key, bridge[key] ?? value]));
             bot.servers ||= [];
             bot.enabled ??= true;
         }
         context.discordProfiles = [];
         context.addDiscordBot = () => config.bots.push(newBot());
-        context.generateDiscordKey = async (bot) => {
-            try {
-                const data = await callJsonApi(endpoint + "discord_config_api", {
-                    action: "generate_auth_key", bot_id: bot.id, draft: true,
-                });
-                if (generation !== this.generation) return;
-                if (!data.auth_key) throw new Error(data.error);
-                bot.chat_bridge.auth_key = data.auth_key;
-                notify("info", "Auth key generated. Save settings to apply it.");
-            } catch (error) { notify("error", error.message); }
-        };
-        context.copyDiscordKey = async (bot) => {
-            try {
-                await navigator.clipboard.writeText(bot.chat_bridge.auth_key || "");
-                notify("success", "Auth key copied.");
-            } catch (_) { notify("error", "Could not copy the auth key."); }
-        };
         try {
             const data = await callJsonApi("agents", { action: "list" });
             if (generation !== this.generation) return;

@@ -284,16 +284,6 @@ def validate_image_url(url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Auth key generation
-# ---------------------------------------------------------------------------
-
-def generate_auth_key(length: int = 32) -> str:
-    """Generate a cryptographically secure URL-safe auth key."""
-    import secrets
-    return secrets.token_urlsafe(length)
-
-
-# ---------------------------------------------------------------------------
 # Auth guard
 # ---------------------------------------------------------------------------
 

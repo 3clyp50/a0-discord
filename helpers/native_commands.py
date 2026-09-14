@@ -43,8 +43,8 @@ def create_tree(bot):
     async def autocomplete(interaction: discord.Interaction, current: str):
         if not bot._allows_user(interaction.user, interaction.guild):
             return []
-        if not bot._is_elevated(str(interaction.user.id), str(interaction.channel_id)):
-            return [app_commands.Choice(name='commands — Help and authentication', value='commands')]
+        if not bot._has_tool_access(str(interaction.user.id), str(interaction.channel_id), interaction.guild.id if interaction.guild else None):
+            return [app_commands.Choice(name='commands - Web UI approval required', value='commands')]
         from agent import AgentContext
         from helpers import integration_commands
         from plugins._commands.helpers import commands

@@ -16,7 +16,7 @@
 5. Go to **Installation** tab (left sidebar):
    - Keep **Guild Install** checked (not User Install)
    - Under Default Install Settings for Guild Install, add scope `bot`
-   - Add permissions: View Channels, Send Messages, Read Message History, Add Reactions, Embed Links, Manage Messages
+   - Add permissions: View Channels, Send Messages, Read Message History, Add Reactions, Embed Links
 6. Copy the install link > open in browser > invite the bot to your server
 
 ## Step 2: Install the Plugin
@@ -97,9 +97,9 @@ Restrict which Discord users can interact with the bot:
 }
 ```
 
-### Elevated Mode (Advanced)
+### Agent access
 
-Grants authenticated Discord users full access to Agent Zero. Disabled by default. Before enabling, read the [full security documentation](../README.md#elevated-mode----important).
+Contact the bot in the intended channel, then approve that user/channel in Discord Config > Agent access. Choose 1 hour (default), 8 hours, 24 hours, or Until revoked for persistent access without automatic expiry. All approvals survive restarts. Messages and slash commands remain read-only without approval. Read the [security guidance](CHAT_BRIDGE.md#agent-access-approvals) before granting full tools.
 
 ---
 
