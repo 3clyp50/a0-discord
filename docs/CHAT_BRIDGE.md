@@ -71,6 +71,20 @@ Sessions are per bot, user and channel. They expire after the configured timeout
 
 An authenticated full-agent chat can load optional skills and use their workflows, subject to normal tool policy. Loading a skill itself never elevates a read-only session. Publishing issues or PRs still requires the corresponding authorized capabilities; Discord read access alone only supports research and drafting.
 
+## Agent Zero slash commands
+
+Use Discord's native `/a0` command and enter a command such as `goal status` in its **command** field. Autocomplete uses the active chat's command catalog. Native responses are visible only to the requester. The bot registers this entry when it starts; restart the bridge after updating its code. If registration fails, check the Agent Zero logs and the application's command permissions and gateway interaction configuration.
+
+Slash text also works: `@bot /commands`, or `/commands` in a registered channel. Replying to a bot message works too. Executable commands require the same per-bot, per-user, per-channel authentication described above. `/stop` reaches an active task without waiting for its reply.
+
+- `/commands [page]` lists available commands, including enabled plugin commands and project overrides. Custom commands use the shared Agent Zero resolver once.
+- `/new`, `/sessions [page]`, and `/chat <ID>` manage saved chats belonging to this bot and channel. Other channels and bots cannot be selected.
+- `/goal`, `/queue`, `/profile`, `/project`, `/models`, and `/browser` use the shared backend operations.
+- `/permissions` lists canonical tool IDs and accepts `allow`, `block`, or `default`; `/plugins` lists instance-wide toggles. Follow the displayed syntax to change settings.
+- `/compact` requests confirmation using the current chat ID. `/copy` sends a transcript file. `/attach` explains image attachments.
+
+Commands that open WebUI-only settings provide a WebUI handoff. Host computer permissions remain controlled through A0 Launcher or A0 CLI. Command output suppresses Discord mentions.
+
 ## Monitoring and research skills
 
 Use [discord-research](../skills/discord-research/SKILL.md) for optional structured bulk analysis, [discord-alerts](../skills/discord-alerts/SKILL.md) for monitoring, and [discord-persona-mapping](../skills/discord-persona-mapping/SKILL.md) for persistent notes. Their reference files load on demand, not into every baseline prompt.

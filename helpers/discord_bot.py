@@ -147,6 +147,10 @@ class ChatBridgeBot(discord.Client):
         # Per-user rate limiting: user_id -> deque of timestamps
         self._rate_limits: dict[str, collections.deque] = {}
         self._channel_locks: dict[str, asyncio.Lock] = {}
+        self._command_ids = collections.deque(maxlen=256)
+        from usr.plugins.discord.helpers.native_commands import create_tree
+        self.command_tree = create_tree(self)
+        self.commands_registered = False
         # Elevated session tracking: "{user_id}:{channel_id}" -> {"at": float, "name": str}
         self._elevated_sessions: dict[str, dict] = {}
         # Failed auth attempt tracking: user_id -> deque of timestamps
@@ -155,6 +159,15 @@ class ChatBridgeBot(discord.Client):
         self._temp_files: list[str] = []
         # Threading event for signaling ready state (set by on_ready)
         self._ready_event: Optional[threading.Event] = None
+
+    async def setup_hook(self):
+        try:
+            # Upsert only our entry; bulk sync would delete other application commands.
+            command = self.command_tree.get_command('a0')
+            await self.http.upsert_global_command(self.application_id, payload=command.to_dict(self.command_tree))
+            self.commands_registered = True
+        except Exception:
+            logger.exception('Discord /a0 registration failed; slash text remains available')
 
     async def on_ready(self):
         logger.info(f"Chat bridge connected as {self.user} (ID: {self.user.id})")
@@ -220,6 +233,9 @@ class ChatBridgeBot(discord.Client):
             set_context_id(channel_id, context.id, self.bot_id)
             mark_dirty_all(reason="discord.chat_created")
         context.set_data("discord_bot_id", self.bot_id)
+        if context.get_data("discord_channel_id") != channel_id:
+            context.set_data("discord_channel_id", channel_id)
+            persist_chat.save_tmp_chat(context)
         return context
 
     # ------------------------------------------------------------------
@@ -422,7 +438,25 @@ class ChatBridgeBot(discord.Client):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
 
-    async def on_message(self, message: discord.Message):
+    def _allows_user(self, user, guild):
+        if user.bot:
+            return False
+        config = self._get_config()
+        if not config.get("bot", {}).get("enabled", True):
+            return False
+        allowed_servers = config.get("servers", [])
+        if allowed_servers and (
+            guild is None
+            or str(guild.id) not in [str(g) for g in allowed_servers]
+        ):
+            return False
+        allowed_users = config.get("chat_bridge", {}).get("allowed_users", [])
+        if allowed_users and str(user.id) not in [str(u) for u in allowed_users]:
+            return False
+
+        return True
+
+    async def on_message(self, message: discord.Message, *, command_invocation=False):
         # Ignore own messages and other bots
         if message.author.bot:
             return
@@ -432,23 +466,12 @@ class ChatBridgeBot(discord.Client):
         user_text = self._strip_bot_mentions(message.content)
         mentioned = user_text != message.content.strip()
 
-        # Mentions never bypass server or user restrictions.
-        config = self._get_config()
-        if not config.get("bot", {}).get("enabled", True):
-            return
-        allowed_servers = config.get("servers", [])
-        if allowed_servers and (
-            message.guild is None
-            or str(message.guild.id) not in [str(g) for g in allowed_servers]
-        ):
-            return
-        allowed_users = config.get("chat_bridge", {}).get("allowed_users", [])
-        if allowed_users and str(message.author.id) not in [str(u) for u in allowed_users]:
+        if not self._allows_user(message.author, message.guild):
             return
 
         replied = await self._replied_message(message)
         replies_to_bot = replied is not None and self.user is not None and replied.author.id == self.user.id
-        if channel_id not in chat_channels and not mentioned and not replies_to_bot:
+        if channel_id not in chat_channels and not mentioned and not replies_to_bot and not command_invocation:
             return
 
         if mentioned and not user_text:
@@ -486,13 +509,49 @@ class ChatBridgeBot(discord.Client):
             return
         timestamps.append(now)
 
+        # Controls must reach a running task before waiting for its message lock.
+        resolved_command = False
+        command_context = None
+        from plugins._commands.helpers import commands
+        invocation = commands.parse_slash_invocation(user_text)
+        if user_text.lstrip().startswith('/') and not invocation['command_name']:
+            await message.channel.send('Unknown command. Use /commands to list commands.')
+            return
+        if invocation['command_name']:
+            message_id = getattr(message, 'id', None)
+            if message_id is not None:
+                if message_id in self._command_ids:
+                    return
+                self._command_ids.append(message_id)
+            if not self._is_elevated(user_key, channel_id):
+                await message.channel.send(
+                    'Agent Zero commands require an authenticated session in this channel. '
+                    'Use the existing !auth flow, then /commands (or /a0 command:commands).',
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            from usr.plugins.discord.helpers.slash_commands import DiscordCommands
+            try:
+                adapter = DiscordCommands(self, message)
+                user_text = await adapter.handle(user_text)
+                command_context = adapter.context
+            except Exception:
+                logger.exception('Discord command setup failed')
+                await message.channel.send('Command unavailable. Check the Agent Zero logs.')
+                return
+            if user_text is None:
+                return
+            resolved_command = True
+
         # Serialize turns so replies cannot overwrite history or become interventions.
         async with self._channel_locks.setdefault(channel_id, asyncio.Lock()), message.channel.typing():
             try:
                 if self._is_elevated(str(message.author.id), channel_id):
                     response_text = await self._get_elevated_response(
-                        channel_id, user_text, message
+                        channel_id, user_text, message, resolved_command=resolved_command, context=command_context
                     )
+                elif resolved_command:
+                    response_text = 'Your authenticated session expired. Authenticate again to run this command.'
                 else:
                     response_text = await self._get_agent_response(
                         channel_id, user_text, message
@@ -723,7 +782,7 @@ class ChatBridgeBot(discord.Client):
     # Elevated mode: full agent loop with tools (authenticated users only)
     # ------------------------------------------------------------------
 
-    async def _get_elevated_response(self, channel_id: str, text: str, message: discord.Message) -> str:
+    async def _get_elevated_response(self, channel_id: str, text: str, message: discord.Message, *, resolved_command=False, context=None) -> str:
         """Route through the full Agent Zero agent loop (tools, code execution, etc.).
 
         SECURITY: Only called for users who have authenticated via !auth <key>.
@@ -733,14 +792,18 @@ class ChatBridgeBot(discord.Client):
             from agent import UserMessage
             from helpers import message_queue
 
-            context = self._get_bridge_context(channel_id, message)
+            context = context or self._get_bridge_context(channel_id, message)
 
             # Sanitize input (injection defense still applies)
             from usr.plugins.discord.helpers.sanitize import sanitize_content, sanitize_username
             author_name = sanitize_username(
                 message.author.display_name or message.author.name
             )
-            safe_text = sanitize_content(text)
+            safe_text = text if resolved_command else sanitize_content(text)
+            # Resolved templates are trusted local command output. Prevent the core
+            # input hook from interpreting either edge as another slash invocation.
+            if resolved_command:
+                safe_text = f"User request:\n\n{safe_text}\n\n[End of request]"
             # In elevated mode the user is authenticated — send their message
             # directly as a user request through communicate(). Do NOT prefix
             # with "[Discord Chat Bridge - …]" because that makes the infection
@@ -776,6 +839,8 @@ class ChatBridgeBot(discord.Client):
             return result if isinstance(result, str) else str(result)
 
         except ImportError:
+            if resolved_command:
+                raise
             return await self._get_agent_response_http(channel_id, text)
 
     def _cleanup_temp_files(self):
@@ -975,7 +1040,8 @@ def get_bot_status(bot_id: str = "default") -> dict:
             return {**status, "status": "stopped" if bot._stop_requested else "disconnected"}
         if bot.is_ready():
             return {**status, "running": True, "status": "connected", "user": str(bot.user),
-                    "user_id": str(bot.user.id), "guilds": len(bot.guilds)}
+                    "user_id": str(bot.user.id), "guilds": len(bot.guilds),
+                    "commands_registered": bot.commands_registered}
         return {**status, "running": True, "status": "connecting"}
 
 
