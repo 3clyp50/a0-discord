@@ -79,7 +79,7 @@ Use live member operations through `discord_read` (`members` / `member`). Load t
 
 New monitoring tasks load `discord-alerts` and invoke the documented workflow. Existing custom or scheduled prompts that directly call the old tool names must be updated; the plugin does not silently rewrite operator-authored tasks. Existing state and saved chats are retained.
 
-Config is the only plugin page. Bot rows use Agent Zero's fields, icon buttons, shared Advanced accordions and notifications. Status refreshes while the modal is open and stops when it closes. Scoped settings cannot operate global bridge controls.
+Config is the only plugin page. Bot rows use Agent Zero's fields, icon buttons and notifications. Shared User Account, Memory, Persona and Alert Polling settings are always visible, without an Advanced accordion. Status refreshes while the modal is open and stops when it closes. Scoped settings cannot operate global bridge controls.
 
 ## Runnable checks
 

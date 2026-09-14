@@ -191,13 +191,15 @@
                                 <span class="field-description" role="status" x-text="request.status + (request.expires_at === null ? ' / Until revoked' : request.expires_at ? ' / Until ' + new Date(request.expires_at * 1000).toLocaleString() : '')"></span>
                             </div>
                             <div class="discord-bot-actions">
-                                <button type="button" class="btn btn-action" :title="$store.discordConfig.accessDisabledReason(bot, 'approve') || (request.approved ? 'Renew approval' : 'Approve full agent access')"
+                                <button type="button" class="btn btn-action discord-access-approve" :title="$store.discordConfig.accessDisabledReason(bot, 'approve') || (request.approved ? 'Renew approval' : 'Approve full agent access')"
+                                    :aria-pressed="request.approved.toString()"
                                     :aria-label="(request.approved ? 'Renew approval for ' : 'Approve access for ') + request.user_name + ' in ' + request.channel_name"
                                     :disabled="!!$store.discordConfig.accessDisabledReason(bot, 'approve') || !request.eligible"
                                     @click="$confirmClick($event, () => $store.discordConfig.accessAction(bot, request, 'approve', accessDuration))">
                                     <x-icon name="check"></x-icon>
                                 </button>
-                                <button type="button" class="btn btn-action" title="Revoke agent access"
+                                <button type="button" class="btn btn-action discord-access-revoke" title="Revoke agent access"
+                                    :aria-pressed="(!request.approved).toString()"
                                     :aria-label="'Revoke access for ' + request.user_name + ' in ' + request.channel_name"
                                     :disabled="!!$store.discordConfig.accessDisabledReason(bot, 'revoke') || request.expires_at === 0"
                                     @click="$store.discordConfig.accessAction(bot, request, 'revoke')">
@@ -216,12 +218,7 @@
                     <button type="button" class="btn btn-field" @click="context.addDiscordBot()" x-text="config.bots.length ? 'Connect another bot' : 'Connect bot'"></button>
                     <div class="field-description">Save settings before starting a new bot.</div>
                 </div>
-<div class="settings-advanced-section" x-data="{ advOpen: false }">
-                    <button type="button" class="settings-advanced-toggle" :aria-expanded="advOpen" @click="advOpen = !advOpen">
-                        <x-icon class="settings-advanced-toggle-icon" :style="advOpen ? 'transform:rotate(90deg)' : ''" name="chevron_right"></x-icon>
-                        <span>Advanced integration settings</span>
-                    </button>
-                    <div class="settings-advanced-body" x-show="advOpen" x-transition.opacity style="display: none;">
+                <div>
                 <!-- User Account (Read-Only) -->
                 <div class="section-title">User Account (Read-Only)</div>
 
@@ -315,7 +312,6 @@
                         </label>
                     </div>
                 </div>
-                    </div>
                 </div>
             </div>
         </template>
@@ -340,6 +336,15 @@
         .discord-access-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-md); padding: var(--spacing-sm) 0; border-bottom: 1px solid var(--color-border); }
         .discord-access-identity { display: flex; flex-direction: column; gap: var(--spacing-xs); flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
         .discord-access-identity .field-description { margin: 0; }
+        .discord-access-approve { --discord-access-color: var(--color-success, #16a34a); }
+        .discord-access-revoke { --discord-access-color: var(--color-error, #dc2626); }
+        .discord-access-row .btn-action[aria-pressed="true"] {
+            color: var(--discord-access-color);
+            border-color: var(--discord-access-color);
+            background: color-mix(in srgb, var(--discord-access-color) 18%, transparent);
+            box-shadow: inset 0 0 0 1px var(--discord-access-color);
+            opacity: 1;
+        }
         .discord-config .btn-action { flex-shrink: 0; }
         .discord-add-bot { padding-top: var(--spacing-sm); }
         .discord-add-bot .field-description { margin-top: var(--spacing-sm); }

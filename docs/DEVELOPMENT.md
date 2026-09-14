@@ -145,6 +145,9 @@ already-running tasks. Config controls require Global / All profiles.
 Run `test_access_approvals`, `test_slash_commands`, `test_mentions` and the
 Node `test_config_store.mjs` check in the framework runtime.
 
+Approval buttons expose the effective server-confirmed access state with
+`aria-pressed` and semantic theme colors; do not highlight an unconfirmed grant.
+
 ### Bot controls in Config
 
 `config.html` is the only plugin page. `discord-store.js` uses `createStore`,

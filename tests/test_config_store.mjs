@@ -4,6 +4,25 @@ import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 import test from "node:test";
 
+test("shared integration settings are always visible", () => {
+    const html = readFileSync(new URL("../webui/config.html", import.meta.url), "utf8");
+    assert.doesNotMatch(html, /settings-advanced|advOpen|Advanced integration settings/);
+    for (const title of ["User Account (Read-Only)", "Memory", "Persona", "Alert Polling"]) {
+        assert.ok(html.includes(`<div class="section-title">${title}</div>`));
+    }
+});
+
+test("approval buttons highlight the confirmed access state", () => {
+    const html = readFileSync(new URL("../webui/config.html", import.meta.url), "utf8");
+    const approve = html.match(/class="btn btn-action discord-access-approve"[\s\S]*?:aria-pressed="([^"]+)"/)[1];
+    const revoke = html.match(/class="btn btn-action discord-access-revoke"[\s\S]*?:aria-pressed="([^"]+)"/)[1];
+    for (const approved of [true, false]) {
+        assert.equal(vm.runInNewContext(approve, { request: { approved } }), String(approved));
+        assert.equal(vm.runInNewContext(revoke, { request: { approved } }), String(!approved));
+    }
+    assert.ok(html.includes('.discord-access-row .btn-action[aria-pressed="true"]'));
+});
+
 test("bot controls use saved IDs, preserve drafts, reject scoped actions and stop on cleanup", async () => {
     const calls = [];
     const timers = new Set();
