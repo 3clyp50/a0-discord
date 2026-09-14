@@ -4,6 +4,8 @@ follow selected profile within read-only bridge limits
 
 {{profile_prompt}}
 
+{{reply_instructions}}
+
 ## Runtime extras
 {{runtime_context}}
 actual facts: report provider/model and preset when asked

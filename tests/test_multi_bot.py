@@ -31,19 +31,20 @@ async def main():
         assert get_discord_config(agent)["bot_id"] == "support"
         assert get_discord_config()["bot"]["token"] == "first"
         selected_id = "support"
-        prompt_agent = SimpleNamespace(number=0, context=SimpleNamespace(get_data=lambda _: selected_id))
+        prompt_agent = SimpleNamespace(number=0, context=SimpleNamespace(get_data=lambda _: selected_id),
+                                       read_prompt=lambda name: "Discord reply guidance")
         extension = DiscordInstructions(agent=prompt_agent)
         system = ["Original profile"]
         await extension.execute(system_prompt=system)
-        assert system == ["Original profile", "## Discord bot instructions\n" + instructions.strip()]
+        assert system == ["Original profile", "Discord reply guidance", "## Discord bot instructions\n" + instructions.strip()]
         second["chat_bridge"]["instructions"] = "Updated instructions"
         system = []
         await extension.execute(system_prompt=system)
-        assert system == ["## Discord bot instructions\nUpdated instructions"]
+        assert system == ["Discord reply guidance", "## Discord bot instructions\nUpdated instructions"]
         for selected_id in (None, "default", "missing"):
             system = []
             await extension.execute(system_prompt=system)
-            assert not system, "Instructions must not leak to other bots or ordinary chats"
+            assert system == (["Discord reply guidance"] if selected_id == "default" else []), "Bot-specific instructions must not leak to other bots or ordinary chats"
         selected_id = "support"
         prompt_agent.number = 1
         system = []
@@ -52,7 +53,7 @@ async def main():
         prompt_agent.number = 0
         second["chat_bridge"]["instructions"] = " \n\t"
         await extension.execute(system_prompt=system)
-        assert not system
+        assert system == ["Discord reply guidance"]
         try:
             get_discord_config(bot_id="missing")
         except ValueError:

@@ -14,11 +14,19 @@ Register a channel only to receive replies to every message. Unregistering remov
 
 ## Bot instructions
 
+Discord-linked root agents and read-only replies default to at most 120 words unless more detail is requested or needed. Detailed evidence belongs in attachments rather than repeated inline reports.
+
 Use **Config > bot > Instructions** for the bot's role, tone and workflows instead of creating a dedicated agent profile. The multiline field accepts Markdown and supplements the selected profile without replacing its capabilities or granting tool access.
 
 Saved instructions are read when building each prompt, including existing chats. They apply to the read-only bridge and the root agent in Discord-linked chats, including full-agent slash requests and their WebUI chat. Other bots, ordinary WebUI chats and subordinate agents do not inherit them. Clearing the field removes the added guidance on the next prompt; it does not erase earlier chat history.
 
 Profile and preset defaults still apply only to new chats. When moving guidance out of a custom profile, update existing chats' profiles separately if needed.
+
+## Fix verification
+
+With approved tool access, fix/commit verification requests load [discord-testing](../skills/discord-testing/SKILL.md) and its on-demand reference. The workflow calls for safe behavioral checks, the correct framework runtime and browser path, supported alternatives when a test runner is missing, and a short evidence-based verdict. It adds no tool or profile and grants no additional permissions. Read-only sessions cannot execute tests.
+
+The skill distinguishes source inspection, component checks and live verification. It does not deploy a commit to make it testable, treat Docker evidence as host-connector proof, or run dangerous timeout probes in a shared browser.
 
 ## Read-only operation
 

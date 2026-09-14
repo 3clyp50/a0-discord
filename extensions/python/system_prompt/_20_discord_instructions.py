@@ -14,6 +14,7 @@ class DiscordInstructions(Extension):
         except ValueError:
             # A saved chat can outlive the bot that created it.
             return
+        system_prompt.append(self.agent.read_prompt("discord.reply.md"))
         instructions = config.get("chat_bridge", {}).get("instructions", "").strip()
         if instructions:
             system_prompt.append("## Discord bot instructions\n" + instructions)

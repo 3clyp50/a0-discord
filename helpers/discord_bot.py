@@ -530,6 +530,7 @@ class ChatBridgeBot(discord.Client):
             prompt = agent.read_prompt(
                 "discord.bridge.md",
                 profile_prompt=profile_prompt,
+                reply_instructions=agent.read_prompt("discord.reply.md"),
                 runtime_context=json.dumps(extras, ensure_ascii=False),
             )
             ledger = context.get_data("discord_bridge_read_ledger") or []

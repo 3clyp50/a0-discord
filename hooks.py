@@ -173,7 +173,7 @@ def uninstall(**kwargs):
 
     # Remove skills
     skills_dst = a0_root / "usr" / "skills"
-    for skill_name in ['discord-alerts', 'discord-chat', 'discord-communicate', 'discord-persona-mapping', 'discord-research']:
+    for skill_name in ['discord-alerts', 'discord-chat', 'discord-communicate', 'discord-persona-mapping', 'discord-research', 'discord-testing']:
         skill_path = skills_dst / skill_name
         if skill_path.is_dir():
             import shutil

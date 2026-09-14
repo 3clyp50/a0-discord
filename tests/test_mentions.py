@@ -67,6 +67,8 @@ async def main():
             assert "## Developer" in system and '"model":' in system and '"preset": "Default"' in system
             assert config["chat_bridge"]["instructions"] in system
             assert "only discord_read executes" in system
+            assert "Default to at most 120 words" in system
+            assert "{{reply_instructions}}" not in system
             assert "recent_channel_messages" in model.call_args.kwargs["messages"][-2].content
             saved = json.loads((Path(tmp) / ctxid / "chat.json").read_text())
             logs = saved["log"]["logs"]
